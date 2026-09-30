@@ -149,11 +149,18 @@ class SlurmLauncher:
         env: Mapping[str, str],
         ntasks: int,
         extra_srun_args: str = "",
+        repetitions: int = 1,
     ) -> Path:
         """Render the complete sbatch script into *run_dir* and return its path.
 
         *env* is injected as an export block in the script HEADER, before any
         python/tooling can run, guaranteeing nothing writes to a missing $HOME.
+
+        With *repetitions* > 1 the benchmark runs in an in-job loop; each pass
+        is delimited by ``=== MPIIO_EVOLVE_REP k ===`` markers that
+        ``parser.parse_rep_throughputs`` splits into independent samples. The
+        job exits with the worst per-rep return code. NOTE: the Slurm --time
+        budget covers ALL repetitions.
         """
         run_dir = ensure_inside(self.workspace, run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -172,8 +179,7 @@ class SlurmLauncher:
             'echo "mpiio_evolve: MPIIO_HINTS=${MPIIO_HINTS:-<unset>} '
             'OMPI_MCA_io_ompio_num_aggregators=${OMPI_MCA_io_ompio_num_aggregators:-<unset>}"',
             "",
-            f"srun {extra_srun_args} -n {ntasks} {command}".replace("  ", " "),
-            "exit $?",
+            self._benchmark_block(command, ntasks, extra_srun_args, repetitions),
             "",
         ]
 
@@ -182,6 +188,24 @@ class SlurmLauncher:
         script_path.chmod(0o750)
         logger.info("compiled submission script -> %s", script_path)
         return script_path
+
+    @staticmethod
+    def _benchmark_block(command: str, ntasks: int,
+                         extra_srun_args: str, repetitions: int) -> str:
+        srun = f"srun {extra_srun_args} -n {ntasks} {command}".replace("  ", " ")
+        if repetitions <= 1:
+            return f"{srun}\nexit $?"
+        return (
+            "worst_rc=0\n"
+            f"for rep in $(seq 1 {repetitions}); do\n"
+            '  echo "=== MPIIO_EVOLVE_REP ${rep} ==="\n'
+            f"  {srun}\n"
+            "  rc=$?\n"
+            '  echo "=== MPIIO_EVOLVE_REP_END ${rep} rc=${rc} ==="\n'
+            "  if [ $rc -gt $worst_rc ]; then worst_rc=$rc; fi\n"
+            "done\n"
+            "exit $worst_rc"
+        )
 
     # ---- submission ----------------------------------------------------------
 

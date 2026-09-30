@@ -181,12 +181,16 @@
     ]
   },
   "fitness": {
+    "repetitions": 3,
+    "repeat_mode": "in_job",
     "prefer": "max",
     "weights": {
       "write": 1.0,
       "read": 0.5
     },
-    "partial_credit": 0.25
+    "partial_credit": 0.25,
+    "reference_candidate": null,
+    "reference_max_age_min": 60
   },
   "logging": {
     "level": "INFO"

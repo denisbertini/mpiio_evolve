@@ -250,6 +250,54 @@ def profile_errors(stderr_text: str, exit_code: int = 0,
     return ErrorReport(clean=False, categories=categories, feedback=feedback, tail=tail)
 
 
+# ---------------------------------------------------------------------------
+# Multi-repetition sampling + physics-style statistics
+# ---------------------------------------------------------------------------
+
+# Marker emitted by the launcher's in-job repetition loop.
+REP_MARKER = re.compile(r"^=== MPIIO_EVOLVE_REP (\d+) ===\s*$", re.MULTILINE)
+
+
+def read_log(path: Path, limit: int = 1 << 22) -> str:
+    """Public log reader: last *limit* bytes (default 4 MiB)."""
+    return _safe_read(path, limit)
+
+
+def parse_rep_throughputs(text: str, prefer: str = "max") -> list:
+    """Split a multi-repetition stdout into per-rep (write, read) MiB/sec.
+
+    Legacy single-run logs (no markers) yield a one-element list. A rep whose
+    section produced no numbers yields (None, None) so the caller can count
+    failed repetitions instead of silently dropping them.
+    """
+    marks = list(REP_MARKER.finditer(text))
+    if not marks:
+        return [parse_throughput(text).best(prefer)]
+    samples = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        samples.append(parse_throughput(text[m.end():end]).best(prefer))
+    return samples
+
+
+def mean_std(values: list) -> tuple:
+    """Physics-style mean and sample standard deviation (denominator N-1).
+
+    None entries are ignored. Returns (mean, std, n) with std == 0.0 when
+    n < 2; (None, None, 0) when no sample is usable. The standard error of
+    the mean is std/sqrt(n), computed by the caller.
+    """
+    vals = [float(v) for v in values if v is not None]
+    n = len(vals)
+    if n == 0:
+        return None, None, 0
+    mean = sum(vals) / n
+    if n < 2:
+        return mean, 0.0, 1
+    var = sum((v - mean) ** 2 for v in vals) / (n - 1)
+    return mean, var ** 0.5, n
+
+
 def parse_log_files(stdout_path: Path, stderr_path: Path) -> tuple[Throughput, str, str]:
     """Convenience reader: returns (throughput, stderr_text, stdout_text)."""
     stdout_text = _safe_read(stdout_path)

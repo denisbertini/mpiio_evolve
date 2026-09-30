@@ -140,8 +140,21 @@ search_space:
 # FITNESS SHAPING
 # =============================================================================
 fitness:
-  # score = w_write * write_mibs + w_read * read_mibs   (0.0 on any crash)
-  # IOR reports Max and Mean; `prefer` chooses which pair to score.
+  # ---- Statistics: physics-style N-fold measurement --------------------------
+  # One benchmark pass on a shared Lustre is an anecdote. Every candidate is
+  # measured `repetitions` times; the score is computed on the ARITHMETIC MEAN
+  # and mean +/- std (and SEM) are reported in the metrics. NEVER score on
+  # max: on shared storage the maximum is contention luck, not signal.
+  repetitions: 3
+  repeat_mode: "in_job"     # in_job      -- N passes inside ONE allocation
+                            #               (cheap; intra-run noise only; the
+                            #               Slurm --time covers ALL reps)
+                            # across_jobs -- N independent sbatch jobs, which
+                            #               also samples queue/contention
+                            #               drift: the honest estimator
+
+  # Per-rep statistic fed from the log (IOR prints both lines per pass);
+  # cross-repetition aggregation is ALWAYS the mean.
   prefer: "max"            # "max" | "mean"
   weights:
     write: 1.0
@@ -149,6 +162,15 @@ fitness:
   # Multiplicative penalty when write throughput is unmeasured but read is
   # (partial crash): score *= partial_credit
   partial_credit: 0.25
+
+  # ---- Drift normalization (optional but recommended for long runs) ----------
+  # A fixed reference candidate is re-measured whenever its last measurement
+  # is older than reference_max_age_min; its write mean then rides along in
+  # every evaluation as metrics["reference_write_mean_mib_sec"], so candidates
+  # from different generations can be compared against a contemporaneous
+  # yardstick instead of raw drifting numbers. null disables.
+  reference_candidate: null      # e.g. "examples/candidate_romio.json"
+  reference_max_age_min: 60
 
 logging:
   level: "INFO"

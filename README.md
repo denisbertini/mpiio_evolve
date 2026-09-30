@@ -133,14 +133,14 @@ image once per session to detect this; a candidate that selects
 ## Fitness protocol
 
 ```
-EVAL_METRICS {"score": 2066.25, "write_mib_sec": 1406.44, "read_mib_sec": 1319.62, ...}
-FITNESS: 2066.2500
+EVAL_METRICS {"score": 1684.48, "write_mean_mib_sec": 1186.98, "write_std_mib_sec": 223.53, "write_sem_mib_sec": 129.05, "read_mean_mib_sec": 994.99, "n_repetitions": 3, ...}
+FITNESS: 1684.4767
 ```
 
-`score = w_write·max_write + w_read·max_read` (weights and `max|mean` choice
-live under `fitness:` in `config.yaml`). Any crash yields `FITNESS: 0.0` — and
-never a dead loop: the exit code is always 0 for the controller, and the
-reason for failure is delivered three ways:
+`score = w_write·write_mean + w_read·read_mean` (weights and the per-rep
+`max|mean` line choice live under `fitness:` in `config.yaml`). Any crash
+yields `FITNESS: 0.0` — and never a dead loop: the exit code is always 0 for
+the controller, and the reason for failure is delivered three ways:
 
 1. stderr (captured by the controller),
 2. `runs/<id>/feedback.txt` (classified, LLM-ready prose),
@@ -151,6 +151,31 @@ Example feedback a mutant receives after an OOM:
 > `[OOM]` The job was OOM-killed: per-rank memory footprint exceeded the
 > `--mem-per-cpu` allocation. Reduce buffer sizes (`cb_buffer_size`,
 > `fb_data_size`) or aggregate fewer ranks per node. *(+ quoted log evidence)*
+
+## Statistics: measuring, not guessing
+
+A single pass on shared Lustre is an anecdote — contention alone can move
+throughput 20–30%. So **every candidate is measured `fitness.repetitions`
+times and scored on the arithmetic mean**, with the error bar reported, never
+maximized away:
+
+| Mode | What it samples | Cost |
+|---|---|---|
+| `in_job` | N benchmark passes inside **one** allocation (intra-run noise only; Slurm `--time` must cover all N) | 1 job |
+| `across_jobs` | N **independent** sbatch jobs — also samples queue + contention drift (the honest estimator) | N jobs |
+
+`EVAL_METRICS` carries `write_mean_mib_sec ± write_std_mib_sec` and the
+standard-error-of-the-mean `write_sem_mib_sec` (σ/√n), so the controller can
+tell a real +8% gain from a lucky read. Two further safeguards:
+
+* **`measurements.jsonl`** — a per-state-directory JSONL ledger of every
+  measurement ever taken (candidate hash, engine, profile, mean/std/n).
+  Drift audits and elite re-validation are one `pandas.read_json(lines=True)`
+  away.
+* **Reference normalization** (opt-in) — a fixed `reference_candidate` is
+  re-measured whenever older than `reference_max_age_min`; its contemporaneous
+  write mean rides along as `reference_write_mean_mib_sec`, giving a yardstick
+  that cancels hour-scale filesystem drift so generations stay comparable.
 
 ## Hard invariants
 

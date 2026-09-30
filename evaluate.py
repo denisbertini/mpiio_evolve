@@ -53,7 +53,8 @@ from infrastructure import (
     ROMIO_HINTS_FILE,
     ensure_inside,
 )
-from parser import ErrorReport, Throughput, parse_log_files, profile_errors
+from parser import (ErrorReport, mean_std, parse_log_files,
+                  parse_rep_throughputs, profile_errors, read_log)
 from slurm_launcher import SlurmLauncher, SlurmResources
 
 logger = logging.getLogger("mpiio_evolve.evaluate")
@@ -221,13 +222,20 @@ def resolve_workspace(cfg: Mapping, state_dir: Optional[str] = None,
 # ---------------------------------------------------------------------------
 
 
-def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int) -> str:
-    """Deterministic pseudo-performance log driven by the candidate params."""
+def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int, rep_index: int = 1) -> str:
+    """Deterministic pseudo-performance log driven by the candidate params.
+
+    rep_index adds a deterministic +/-8 % jitter so multi-repetition dry-runs
+    exercise the mean/std/SEM path while staying fully reproducible (an
+    evolution trace must never depend on RNG state).
+    """
     seed = hashlib.sha256(json.dumps(
         {"r": io_cfg.romio_hints, "o": io_cfg.ompio_mca,
-         "s": (io_cfg.stripe.stripe_count, io_cfg.stripe.stripe_size)},
+         "s": (io_cfg.stripe.stripe_count, io_cfg.stripe.stripe_size),
+         "rep": rep_index},
         sort_keys=True).encode()).hexdigest()
-    rnd = int(seed[:8], 16) / 0xFFFFFFFF           # 0..1, stable per candidate
+    rnd = int(seed[:8], 16) / 0xFFFFFFFF
+    jitter = 1.0 + 0.08 * (2.0 * rnd - 1.0)       # +/- 8 % contention proxy
 
     sc = io_cfg.stripe.stripe_count if io_cfg.stripe.stripe_count > 0 else 4
     # Sweet-spot model: throughput peaks around 8..32 stripes and good hint combos
@@ -235,7 +243,8 @@ def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int) -> str:
     hint_bonus = 0.15 if (io_cfg.romio_hints.get("romio_cb_write") == "enable"
                           or io_cfg.ompio_mca.get("num_aggregators", 0)) else 0.0
     base = min(ntasks, 64) * 45.0                  # ~MiB/s per task ceiling
-    write = max(50.0, base * max(0.2, stripe_term) * (0.85 + 0.3 * rnd) * (1 + hint_bonus))
+    write = max(50.0, base * max(0.2, stripe_term) * (0.85 + 0.3 * rnd)
+                * (1 + hint_bonus)) * jitter
     read = write * (0.75 + 0.2 * rnd)
 
     def fmt(label: str, mib: float) -> str:
@@ -250,6 +259,13 @@ def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int) -> str:
     ])
 
 
+def _synthetic_multirep(io_cfg: IoConfig, ntasks: int, reps: int) -> str:
+    """Concatenate rep-jittered synthetic logs with the launcher markers."""
+    return "\n".join(
+        f"=== MPIIO_EVOLVE_REP {k} ===\n"
+        + _synthetic_ior_log(io_cfg, ntasks, k) for k in range(1, reps + 1))
+
+
 # ---------------------------------------------------------------------------
 # Core evaluation lifecycle
 # ---------------------------------------------------------------------------
@@ -258,7 +274,8 @@ def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int) -> str:
 def evaluate(candidate: Mapping[str, Any],
              config_path: Path = DEFAULT_CONFIG,
              dry_run: Optional[bool] = None,
-             state_dir: Optional[str] = None) -> dict:
+             state_dir: Optional[str] = None,
+             _is_reference: bool = False) -> dict:
     """Evaluate one I/O configuration candidate. Never raises on bad input."""
     started = time.monotonic()
     cfg = load_config(config_path)
@@ -279,6 +296,11 @@ def evaluate(candidate: Mapping[str, Any],
     engine = "?"
     layout_desc = "(not applied)"
     profile_name = "default"
+    exit_code = -1.0
+    reps = max(1, int(fit_cfg.get("repetitions", 1)))
+    repeat_mode = str(fit_cfg.get("repeat_mode", "in_job"))
+    w_mean = w_std = r_mean = r_std = None
+    n_w = n_r = 0
 
     try:
         # -- 1. validate ------------------------------------------------------
@@ -330,37 +352,69 @@ def evaluate(candidate: Mapping[str, Any],
             hints_file=hints_file or "",
         )
         launcher = SlurmLauncher(ws, dry_run=simulate)
-        script = launcher.build_script(
-            run_dir,
-            SlurmResources.from_config(cfg["cluster"], job_name=f"ev-{run_id}"),
-            command, env, ntasks,
-            extra_srun_args=str(cfg["cluster"].get("extra_srun_args", "") or ""),
-        )
-        slurm_timeout = _time_limit_seconds(cfg["cluster"]) + 120
-        result = launcher.submit(script, wait=bool(cfg["cluster"].get("wait", True)),
-                                 timeout=slurm_timeout)
+        resources = SlurmResources.from_config(cfg["cluster"],
+                                               job_name=f"ev-{run_id}")
+        extra_srun = str(cfg["cluster"].get("extra_srun_args", "") or "")
+        job_timeout = _time_limit_seconds(cfg["cluster"]) + 120
+        wait = bool(cfg["cluster"].get("wait", True))
+        prefer = str(fit_cfg.get("prefer", "max"))
 
-        # -- 5. synthetic log in dry-run so parser+fitness still run -------------
-        if result.simulated:
-            (run_dir / "stdout.log").write_text(
-                _synthetic_ior_log(io_cfg, ntasks), encoding="utf-8")
+        # -- 4b. N-fold sampling --------------------------------------------------
+        # Physics-style: one measurement is an anecdote.
+        #   in_job      -> `reps` passes inside ONE allocation, delimited by
+        #                  === MPIIO_EVOLVE_REP k === markers (cheap; measures
+        #                  intra-allocation noise only; --time covers all reps)
+        #   across_jobs -> `reps` independent sbatch jobs (captures queue +
+        #                  contention drift -- the honest estimator)
+        if repeat_mode == "across_jobs":
+            samples, stderr_parts, exit_codes = [], [], []
+            res_k = None
+            for k in range(1, reps + 1):
+                rdir = run_dir / f"rep{k}"
+                script_k = launcher.build_script(
+                    rdir, resources, command, env, ntasks,
+                    extra_srun_args=extra_srun)
+                res_k = launcher.submit(script_k, wait=wait, timeout=job_timeout)
+                if res_k.simulated:
+                    (rdir / "stdout.log").write_text(
+                        _synthetic_ior_log(io_cfg, ntasks, k), encoding="utf-8")
+                tp_k, err_k, _ = parse_log_files(res_k.stdout_path,
+                                                 res_k.stderr_path)
+                samples.append(tp_k.best(prefer))
+                stderr_parts.append(err_k)
+                exit_codes.append(res_k.exit_code)
+            result = res_k
+            stderr_text = "\n".join(t for t in stderr_parts if t)
+            exit_code = max(exit_codes)
+        else:
+            script = launcher.build_script(
+                run_dir, resources, command, env, ntasks,
+                extra_srun_args=extra_srun, repetitions=reps)
+            result = launcher.submit(script, wait=wait, timeout=job_timeout)
+            if result.simulated:
+                (run_dir / "stdout.log").write_text(
+                    _synthetic_multirep(io_cfg, ntasks, reps), encoding="utf-8")
+            samples = parse_rep_throughputs(read_log(result.stdout_path), prefer)
+            stderr_text = read_log(result.stderr_path)
+            exit_code = result.exit_code
 
-        # -- 6. parse & score ------------------------------------------------------
-        throughput, stderr_text, _ = parse_log_files(result.stdout_path, result.stderr_path)
-        write_mibs, read_mibs = throughput.best(fit_cfg.get("prefer", "max"))
-        no_data = write_mibs is None and read_mibs is None
+        # -- 6. statistics & scoring -----------------------------------------------
+        # Score on the MEAN; the error bar is reported, never maximized away.
+        w_mean, w_std, n_w = mean_std([w for (w, _r) in samples])
+        r_mean, r_std, n_r = mean_std([r for (_w, r) in samples])
+        no_data = w_mean is None and r_mean is None
 
         report: ErrorReport = profile_errors(
-            stderr_text, exit_code=result.exit_code, throughput_zero=no_data)
+            stderr_text, exit_code=exit_code, throughput_zero=no_data)
         if not report.clean:
             feedback = report.feedback
             (run_dir / "feedback.txt").write_text(report.feedback, encoding="utf-8")
 
-        score = _score(write_mibs, read_mibs, result.exit_code, fit_cfg)
+        score = _score(w_mean, r_mean, exit_code, fit_cfg)
 
     except Exception as exc:                                  # noqa: BLE001
         logger.exception("candidate evaluation aborted")
-        score, write_mibs, read_mibs = 0.0, None, None
+        score, w_mean, r_mean = 0.0, None, None
         feedback = (f"[CONFIG_ERROR] The candidate was rejected before or during "
                     f"submission: {type(exc).__name__}: {exc}. Fix the parameter "
                     f"values and stay inside the declared search space.")
@@ -370,11 +424,20 @@ def evaluate(candidate: Mapping[str, Any],
     # -- 7. cleanup ------------------------------------------------------------
     _cleanup(run_dir, ws, cfg, keep_data=bool(ws_cfg.get("keep_data", False)))
 
+    sem_w = (w_std / (n_w ** 0.5)) if (w_std and n_w > 1) else 0.0
+    sem_r = (r_std / (n_r ** 0.5)) if (r_std and n_r > 1) else 0.0
     metrics = {
         "score": float(score),
-        "write_mib_sec": float(write_mibs) if write_mibs is not None else 0.0,
-        "read_mib_sec": float(read_mibs) if read_mibs is not None else 0.0,
-        "job_exit_code": float(result.exit_code) if result else -1.0,
+        "write_mean_mib_sec": float(w_mean) if w_mean is not None else 0.0,
+        "write_std_mib_sec": float(w_std) if w_std is not None else 0.0,
+        "write_sem_mib_sec": float(sem_w),
+        "read_mean_mib_sec": float(r_mean) if r_mean is not None else 0.0,
+        "read_std_mib_sec": float(r_std) if r_std is not None else 0.0,
+        "read_sem_mib_sec": float(sem_r),
+        "n_repetitions": float(reps),
+        "n_write_samples": float(n_w),
+        "n_read_samples": float(n_r),
+        "job_exit_code": float(exit_code),
         "runtime_sec": round(time.monotonic() - started, 3),
     }
     context = {
@@ -383,9 +446,28 @@ def evaluate(candidate: Mapping[str, Any],
         "state_workspace": str(ws),
         "engine": engine,
         "benchmark_profile": profile_name,
+        "repeat_mode": repeat_mode,
         "layout": layout_desc,
         "feedback": feedback,
     }
+
+    # -- 8. measurement database + reference normalization ------------------------
+    _append_measurement(ws, {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "candidate_sha": hashlib.sha256(json.dumps(
+            cand, sort_keys=True, default=str).encode()).hexdigest()[:12],
+        "engine": engine, "profile": profile_name, "repeat_mode": repeat_mode,
+        **metrics})
+    if _is_reference:
+        (ws / "reference_measure.json").write_text(
+            json.dumps(metrics), encoding="utf-8")
+    else:
+        ref = _ensure_reference(cfg, ws, config_path, dry_run, state_dir)
+        if ref:
+            metrics["reference_write_mean_mib_sec"] = ref.get(
+                "write_mean_mib_sec", 0.0)
+
     (run_dir / "result.json").write_text(
         json.dumps({"metrics": metrics, "context": context}, indent=2),
         encoding="utf-8")
@@ -487,6 +569,67 @@ def _cleanup(run_dir: Path, ws: Path, cfg: Mapping, keep_data: bool) -> None:
     for old in run_dirs[:-keep]:
         logger.info("garbage-collecting old run %s", old.name)
         shutil.rmtree(old, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Measurement database & reference normalization
+# ---------------------------------------------------------------------------
+
+
+def _append_measurement(ws: Path, record: Mapping) -> None:
+    """Append one evaluation to <state_dir>/measurements.jsonl.
+
+    A JSONL ledger of every measurement taken in this state directory: drift
+    analysis, elite re-validation, and "was generation 7 just a quiet
+    Lustre afternoon?" audits are all one pandas.read_json(lines=True) away.
+    """
+    try:
+        with (ws / "measurements.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(dict(record)) + "\n")
+    except OSError as exc:
+        logger.warning("measurement db write failed: %s", exc)
+
+
+def _ensure_reference(cfg: Mapping, ws: Path, config_path: Path,
+                      dry_run: Optional[bool],
+                      state_dir: Optional[str] = None) -> Optional[dict]:
+    """(Re)measure the fixed reference candidate when its stamp is stale.
+
+    The reference gives a contemporaneous yardstick: filesystem contention
+    drifts over hours, so absolute means across generations are not directly
+    comparable -- means relative to a reference measured nearby in time are.
+    Opt-in via fitness.reference_candidate; costs one extra evaluation per
+    reference_max_age_min window.
+    """
+    fit_cfg = cfg.get("fitness", {}) or {}
+    ref_spec = fit_cfg.get("reference_candidate")
+    if not ref_spec:
+        return None
+    ref_file = Path(str(ref_spec))
+    if not ref_file.is_absolute():
+        ref_file = REPO_ROOT / ref_file
+    if not ref_file.is_file():
+        logger.warning("reference_candidate %s not found -- skipping", ref_file)
+        return None
+    stamp = ws / "reference_measure.json"
+    max_age = float(fit_cfg.get("reference_max_age_min", 60)) * 60.0
+    try:
+        fresh = stamp.exists() and (time.time() - stamp.stat().st_mtime) < max_age
+    except OSError:
+        fresh = False
+    if not fresh:
+        try:
+            ref_cand = json.loads(ref_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("reference_candidate unreadable: %s", exc)
+            return None
+        logger.info("re-measuring reference candidate %s", ref_file.name)
+        evaluate(ref_cand, config_path=config_path, dry_run=dry_run,
+                 state_dir=state_dir, _is_reference=True)
+    try:
+        return json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
