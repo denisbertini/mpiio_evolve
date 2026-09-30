@@ -170,10 +170,49 @@ Example feedback a mutant receives after an OOM:
    Data files are deleted after scoring unless `workspace.keep_data: true`;
    old runs are garbage-collected beyond `workspace.keep_runs`.
 
+## Runtime environments (who runs what, and with which Python)
+
+| Where | What runs | Python need |
+|---|---|---|
+| **Login node** (has `$HOME`) | OpenEvolve controller + `evaluate.py` / `infrastructure.py` / `slurm_launcher.py` / `parser.py`, `lfs setstripe`, `sbatch --wait` | **frozen system Python 3.9, zero dependencies** |
+| **Compute nodes** (NO `$HOME`) | only the benchmark, inside `images/current.sif` (`srun apptainer exec …`) | none — the launcher never executes there |
+
+Because the compute-side `$HOME` does not exist, the generated batch script's
+export header (`HOME`, caches, `TMPDIR`, …) is what makes jobs run; no
+launcher Python is involved on the compute side.
+
+**Python 3.9 / no-PyYAML guarantee for the evaluator** (enforced by tests):
+
+* `simple_yaml.py` — bundled stdlib loader for the YAML subset used by
+  `config.yaml`; `load_config()` chain is
+  `*.json → PyYAML (if present) → simple_yaml → config.generated.json`.
+* `tools/compile_config.py` — regenerates the committed `config.generated.json`
+  mirror (`--check` verifies sync). Use
+  `python3 evaluate.py --config config.generated.json` on a strictly bare node.
+* Syntax gate: every module parses under `ast.parse(feature_version=(3,9))`;
+  no 3.10+ syntax or stdlib APIs.
+
+## Controller deployment
+
+The heavy Python stack (OpenEvolve, `openai` client) must **not** go into the
+plasma `.def` (it is rebuilt only for physics changes, and it never hosts
+`sbatch`/`lfs` work). Two supported shapes:
+
+1. **Login-node venv (simplest):** `$HOME` exists on the login node, but keep
+   the env on scratch anyway: `python3 -m venv .controller_env &&
+   .controller_env/bin/pip install openevolve openai`. OpenEvolve supports
+   Python ≥ 3.9, so the system interpreter suffices.
+2. **Thin controller container + mailbox:** a small `python:3.12-slim`-based
+   image runs OpenEvolve only; it never calls `sbatch`. It writes candidate
+   JSON into `queue/pending/`; a pure-stdlib 3.9 host process (`evaluate.py`)
+   consumes, evaluates, and writes results to `queue/done/`. This keeps Slurm
+   clients host-native (no version-drift bind-mounts, no nested Apptainer).
+
 ## Quick start
 
 ```bash
-pip install -r requirements.txt          # PyYAML; everything else is stdlib
+# No install needed on the login node (stdlib Python 3.9). Optional dev extra:
+pip install PyYAML                        # only for the fuller YAML parser
 
 # Offline validation (no Slurm/Lustre needed). --dry-run renders the real
 # submit.sh and synthesizes a parameter-sensitive IOR log so the whole
@@ -222,10 +261,14 @@ Suggested mutation-prompt preamble:
 ```
 mpiio_evolve/
 ├── config.yaml                 # search space + cluster + container + profiles
+├── config.generated.json       # stdlib-parseable mirror (tools/compile_config.py)
 ├── infrastructure.py           # Lustre / ROMIO / OMPIO / container translation
 ├── slurm_launcher.py           # sbatch script compiler + --wait submit
 ├── parser.py                   # throughput regexes + error profiler
 ├── evaluate.py                 # OpenEvolve entrypoint (FITNESS: protocol)
+├── simple_yaml.py              # stdlib-only YAML-subset loader (no PyYAML needed)
+├── tools/
+│   └── compile_config.py       # config.yaml -> config.generated.json (+ --check)
 ├── container/
 │   ├── plasma_pp.def           # full plasma HPC stack (Virgo2 production image)
 │   └── build_container.sh      # login-node builder ($HOME-free)

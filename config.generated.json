@@ -1,0 +1,193 @@
+{
+  "workspace": {
+    "root": ".",
+    "runs_subdir": "runs",
+    "home_subdir": ".fake_home",
+    "keep_data": false,
+    "keep_runs": 200
+  },
+  "cluster": {
+    "partition": "compute",
+    "account": "io_optimization",
+    "qos": null,
+    "nodes": 1,
+    "tasks_per_node": 32,
+    "cpus_per_task": 1,
+    "mem_per_cpu": "4000M",
+    "time_limit": "00:10:00",
+    "constraint": null,
+    "extra_sbatch": [],
+    "extra_srun_args": "--mpi=pmix",
+    "wait": true,
+    "mpi_engine": "auto",
+    "default_engine": "romio"
+  },
+  "container": {
+    "enabled": true,
+    "runtime": "apptainer",
+    "image": "images/current.sif",
+    "exec_opts": "--contain --bind {workspace}",
+    "mpi_mode": "srun_direct"
+  },
+  "benchmark": {
+    "active": "epoch_io",
+    "profiles": {
+      "epoch_io": {
+        "command": "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
+      },
+      "ior_canary": {
+        "command": "IOR -a MPIIO -t {transfer_block} -b {block_size} -s {segment} -i {repetitions} -F -e -k -v 1 -o {data_dir}/iorfs",
+        "transfer_block": "1M",
+        "block_size": "1G",
+        "segment": "4",
+        "repetitions": 3
+      }
+    }
+  },
+  "search_space": {
+    "lustre": {
+      "stripe_count": [
+        -1,
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        56,
+        112
+      ],
+      "stripe_size": [
+        "1M",
+        "4M",
+        "8M",
+        "16M",
+        "32M"
+      ]
+    },
+    "romio": {
+      "romio_cb_read": [
+        "automatic",
+        "enable",
+        "disable"
+      ],
+      "romio_cb_write": [
+        "automatic",
+        "enable",
+        "disable"
+      ],
+      "cb_nodes": [
+        1,
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "cb_buffer_size": [
+        "131072",
+        "262144",
+        "1M",
+        "4M",
+        "8M"
+      ],
+      "romio_ds_read": [
+        "automatic",
+        "enable",
+        "disable"
+      ],
+      "romio_ds_write": [
+        "automatic",
+        "enable",
+        "disable"
+      ],
+      "striping_count": [
+        null,
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        56
+      ],
+      "striping_unit": [
+        null,
+        "64K",
+        "1M",
+        "4M",
+        "8M"
+      ],
+      "no_io_anchors": [
+        null,
+        true
+      ],
+      "direct_io": [
+        null,
+        "enable",
+        "disable"
+      ]
+    },
+    "ompio": {
+      "num_aggregators": [
+        0,
+        1,
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "jobs_per_aggregator": [
+        1,
+        "auto",
+        2,
+        4,
+        8
+      ],
+      "io_stripe_size": [
+        "1M",
+        "4M",
+        "8M",
+        "16M"
+      ],
+      "fb_data_size": [
+        "64K",
+        "256K",
+        "1M",
+        "4M"
+      ],
+      "coll_opt": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "periodic_file_sync": [
+        0,
+        1
+      ]
+    },
+    "extra_env": {},
+    "env_prefix_allowlist": [
+      "I_",
+      "ROMIO_",
+      "FI_",
+      "UCX_",
+      "LUSTRE_",
+      "PMI_",
+      "MPIIO_"
+    ]
+  },
+  "fitness": {
+    "prefer": "max",
+    "weights": {
+      "write": 1.0,
+      "read": 0.5
+    },
+    "partial_credit": 0.25
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

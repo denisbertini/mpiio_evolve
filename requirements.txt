@@ -1,8 +1,12 @@
-# mpiio_evolve runtime dependencies (standard library covers the rest)
-PyYAML>=6.0
-
-# The evolutionary controller itself is deployed separately on the CPU
-# login/compute side; install it in its own environment:
-#   pip install git+https://github.com/codelion/openevolve.git
-# (or your internal fork). It communicates with this repo exclusively via
-# evaluate.py's function API or its FITNESS: stdout protocol.
+# mpiio_evolve launcher/evaluator: ZERO required dependencies.
+# Runs on the login node's frozen system Python 3.9 with stdlib only
+# (os, sys, re, json, subprocess, pathlib, logging + bundled simple_yaml.py).
+#
+# Optional, for editing/compiling config.yaml with a full YAML parser on a
+# development machine (the evaluator falls back to simple_yaml.py or to the
+# committed config.generated.json when PyYAML is absent):
+#   PyYAML>=6.0
+#
+# The OpenEvolve controller itself is deployed separately (its own venv or
+# thin container -- see README "Controller deployment"); it does not share
+# this requirements file.

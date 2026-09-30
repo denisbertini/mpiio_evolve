@@ -43,8 +43,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-import yaml
-
 from infrastructure import (
     IoConfig,
     LustreConfigurator,
@@ -69,8 +67,43 @@ DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh)
+    """Load config from YAML or JSON with ZERO hard third-party deps.
+
+    The evaluator must run on a login node with a frozen system Python 3.9
+    and no guaranteed PyYAML, so the loader chain is:
+
+        *.json               -> stdlib json
+        *.yaml with PyYAML   -> yaml.safe_load (richest parser)
+        *.yaml without it    -> bundled simple_yaml (config.yaml subset)
+
+    If a YAML config fails to parse on this host and a sibling
+    config.generated.json exists (see tools/compile_config.py), that is used
+    automatically as the stdlib-only escape hatch.
+    """
+    path = Path(path)
+    try:
+        return _load_config_one(path)
+    except Exception:
+        generated = path.parent / "config.generated.json"
+        if path.suffix.lower() in (".yaml", ".yml") and generated.exists():
+            logger.warning("could not parse %s -- falling back to %s",
+                           path, generated)
+            return _load_config_one(generated)
+        raise
+
+
+def _load_config_one(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        cfg = json.loads(text)
+    else:
+        try:
+            import yaml                                   # type: ignore
+        except ImportError:
+            from simple_yaml import load as _simple_load
+            cfg = _simple_load(text)
+        else:
+            cfg = yaml.safe_load(text)
     if not isinstance(cfg, dict):
         raise ValueError(f"config {path} did not parse to a mapping")
     return cfg
