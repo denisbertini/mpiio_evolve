@@ -202,6 +202,15 @@ launcher Python is involved on the compute side.
 
 ## Controller deployment
 
+> **"But the login node has no GPU!"** — correct, and it does not need one.
+> OpenEvolve is a pure-Python orchestrator: HTTP/SSE client for the LLM,
+> string diffing, `sbatch` spawning, log parsing, a small artifact DB. It
+> idles waiting on the network and on Slurm. All token generation happens on
+> the **GPU cluster** (vLLM/Ollama), all benchmark I/O on the **compute
+> nodes**. Controller footprint: <1 core, ~0.5-2 GB RAM — login-node legal
+> courtesy (tmux + nice) rather than policy problem.
+
+
 The heavy Python stack (OpenEvolve, `openai` client) must **not** go into the
 plasma `.def` (it is rebuilt only for physics changes, and it never hosts
 `sbatch`/`lfs` work). Two supported shapes:
