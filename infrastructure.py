@@ -1,0 +1,386 @@
+"""
+infrastructure.py -- Storage Hardware Modeler
+=============================================
+
+Translates an abstract I/O configuration candidate into concrete artifacts:
+
+1. Lustre layout      -> ``lfs setstripe -c {count} -S {size} {dir}``
+2. ROMIO hints        -> plaintext hint file exported via ``MPIIO_HINTS``
+                         (MPICH / Intel MPI / Cray MPICH)
+3. OMPIO MCA vars     -> environment dict prefixed with ``OMPI_MCA_``
+                         (Open MPI 4.x io_ompio component)
+4. Home isolation     -> a synthetic $HOME + cache tree that lives entirely
+                         inside the parallel-filesystem workspace, because the
+                         deployment host has no writable user home directory.
+
+Standard library only (os, shutil, subprocess, re, pathlib).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping, Optional
+
+logger = logging.getLogger("mpiio_evolve.infrastructure")
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+
+class InfrastructureError(RuntimeError):
+    """Base class for storage-modeling failures."""
+
+
+class PathIsolationError(InfrastructureError):
+    """Raised when an operation would escape the scratch workspace."""
+
+
+class LustreError(InfrastructureError):
+    """Raised when ``lfs setstripe`` fails (bad layout, MDT refused, ...)."""
+
+
+# ---------------------------------------------------------------------------
+# Hard path isolation helpers
+# ---------------------------------------------------------------------------
+
+
+def ensure_inside(base: Path, target: Path) -> Path:
+    """Return *target* resolved, asserting it lies inside *base*.
+
+    Every filesystem mutation in this project funnels through here so that a
+    buggy/mutated candidate can never delete or write outside the workspace.
+    Symlinks are resolved on both sides before the prefix test.
+    """
+    base_r = Path(base).resolve()
+    target_r = Path(target).resolve()
+    if base_r != target_r and base_r not in target_r.parents:
+        raise PathIsolationError(
+            f"path isolation violation: {target_r} is outside workspace {base_r}"
+        )
+    return target_r
+
+
+_SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)(i?B)?\s*$", re.IGNORECASE)
+_SIZE_MULT = {"": 1, "K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
+
+
+def parse_size(text: Any) -> Optional[int]:
+    """Parse '4M', '131072', '8 MiB' ... into bytes. ``None`` passes through."""
+    if text is None:
+        return None
+    if isinstance(text, (int, float)):
+        return int(text)
+    m = _SIZE_RE.match(str(text))
+    if not m:
+        raise ValueError(f"unparseable size: {text!r}")
+    return int(float(m.group(1)) * _SIZE_MULT[m.group(2).upper()])
+
+
+# ---------------------------------------------------------------------------
+# Candidate data model
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LustreStripeSpec:
+    """Target Lustre layout for the run's data directory."""
+
+    stripe_count: int = 0          # -1 broadcast, 0 fs default
+    stripe_size: str = "1M"        # passed verbatim to `lfs -S`
+
+    def validate(self, space: Mapping[str, Any]) -> None:
+        counts = space.get("stripe_count", [])
+        sizes = space.get("stripe_size", [])
+        if counts and self.stripe_count not in counts:
+            raise ValueError(
+                f"stripe_count={self.stripe_count} outside search space {counts}"
+            )
+        if sizes and str(self.stripe_size) not in [str(s) for s in sizes]:
+            raise ValueError(
+                f"stripe_size={self.stripe_size!r} outside search space {sizes}"
+            )
+
+
+@dataclass
+class IoConfig:
+    """A fully materialised, validated candidate configuration."""
+
+    engine: str                                    # "romio" | "ompio"
+    stripe: LustreStripeSpec
+    romio_hints: dict = field(default_factory=dict)
+    ompio_mca: dict = field(default_factory=dict)
+    extra_env: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_candidate(cls, candidate: Mapping[str, Any], engine: str) -> "IoConfig":
+        """Build an IoConfig from a raw (LLM-mutated) candidate mapping.
+
+        Accepted candidate shapes::
+
+            {"lustre": {"stripe_count": 8, "stripe_size": "4M"},
+             "romio":  {"romio_cb_write": "enable", "cb_nodes": 16},
+             "ompio":  {"num_aggregators": 8}}
+        """
+        if engine not in ("romio", "ompio"):
+            raise ValueError(f"unknown MPI engine: {engine!r}")
+
+        lustre = candidate.get("lustre", {}) or {}
+        stripe = LustreStripeSpec(
+            stripe_count=int(lustre.get("stripe_count", 0)),
+            stripe_size=str(lustre.get("stripe_size", "1M")),
+        )
+
+        romio = {k: _norm_hint(v) for k, v in (candidate.get("romio", {}) or {}).items()
+                 if v is not None}
+        ompio = {k: _norm_hint(v) for k, v in (candidate.get("ompio", {}) or {}).items()
+                 if v is not None}
+        extra = {str(k): str(v) for k, v in (candidate.get("extra_env", {}) or {}).items()}
+
+        return cls(engine=engine, stripe=stripe, romio_hints=romio,
+                   ompio_mca=ompio, extra_env=extra)
+
+
+def _norm_hint(value: Any) -> str:
+    """Normalize Python values to ROMIO/MCA plaintext spellings."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Lustre configurator
+# ---------------------------------------------------------------------------
+
+
+class LustreConfigurator:
+    """Apply Lustre layouts via ``lfs`` (no-op in dry-run mode)."""
+
+    def __init__(self, dry_run: bool = False) -> None:
+        self.dry_run = dry_run or shutil.which("lfs") is None
+        if self.dry_run:
+            logger.warning("lfs unavailable -- Lustre striping will be simulated")
+
+    @staticmethod
+    def is_lustre(path: Path) -> bool:
+        """Heuristic lustre detection via ``lfs df`` on *path*."""
+        if shutil.which("lfs") is None:
+            return False
+        try:
+            out = subprocess.run(
+                ["lfs", "df", str(path)], capture_output=True, text=True, timeout=30
+            )
+            return out.returncode == 0 and "lustre" in out.stdout.lower()
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def apply(self, directory: Path, spec: LustreStripeSpec) -> str:
+        """Run ``lfs setstripe -c {count} -S {size} {dir}`` on *directory*.
+
+        Returns a human-readable description of the applied/simulated layout.
+        Raises LustreError when the MDT rejects the layout.
+        """
+        directory.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "lfs", "setstripe",
+            "-c", str(spec.stripe_count),
+            "-S", str(spec.stripe_size),
+            str(directory),
+        ]
+        if self.dry_run:
+            logger.info("[dry-run] %s", " ".join(cmd))
+            return f"[simulated] lfs setstripe -c {spec.stripe_count} -S {spec.stripe_size} {directory}"
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            raise LustreError(
+                f"lfs setstripe failed (rc={proc.returncode}): "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        logger.info("applied layout: -c %s -S %s -> %s",
+                    spec.stripe_count, spec.stripe_size, directory)
+        return self.describe(directory)
+
+    def describe(self, directory: Path) -> str:
+        """``lfs getstripe -v`` output, for feeding back to the LLM."""
+        if self.dry_run:
+            return "[simulated] lfs getstripe unavailable"
+        proc = subprocess.run(
+            ["lfs", "getstripe", "-v", str(directory)],
+            capture_output=True, text=True, timeout=60,
+        )
+        return proc.stdout if proc.returncode == 0 else f"(lfs getstripe failed: {proc.stderr.strip()})"
+
+
+# ---------------------------------------------------------------------------
+# ROMIO hint-file writer  (MPICH / Intel MPI / Cray MPICH)
+# ---------------------------------------------------------------------------
+
+ROMIO_HINTS_FILE = "mpiio_hints"
+
+# Whitelist of hint keys ROMIO actually consumes; unknown keys are dropped with
+# a warning so a hallucinated hint cannot silently poison every run.
+ROMIO_KNOWN_HINTS = {
+    "romio_cb_read", "romio_cb_write", "cb_nodes", "cb_buffer_size",
+    "cb_config_list", "striping_count", "striping_unit", "no_io_anchors",
+    "romio_ds_read", "romio_ds_write", "direct_io", "cache_aggregators",
+    "cache_details", "romio_dataview_individual", "romio_dtype_endianness",
+    "romio_no_indep_rw", "ind_wr_buffer_size", "ind_rd_buffer_size",
+}
+
+
+def write_romio_hints(path: Path, hints: Mapping[str, str]) -> Optional[Path]:
+    """Write a ROMIO plaintext hint file (``key=value`` lines).
+
+    ROMIO reads the file when the job environment exports
+    ``MPIIO_HINTS=<path>``. Returns the path written, or None if there were
+    no hints at all (nothing to materialize).
+    """
+    usable = {}
+    for key, value in hints.items():
+        if key not in ROMIO_KNOWN_HINTS:
+            logger.warning("dropping unknown ROMIO hint %r", key)
+            continue
+        usable[key] = value
+    if not usable:
+        return None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write("# IO hints file\n")          # ROMIO magic first line
+        fh.write("# generated by mpiio_evolve -- do not edit\n")
+        for key in sorted(usable):
+            fh.write(f"{key}={usable[key]}\n")
+    logger.info("ROMIO hint file -> %s (%d hints)", path, len(usable))
+    return path
+
+
+def romio_environment(hints_file: Optional[Path]) -> dict:
+    """Environment fragment that activates a ROMIO hint file."""
+    env = {"MPIIO_HINTS": str(hints_file)} if hints_file else {}
+    # Make ROMIO verbose so parser.py can surface hint-level diagnostics.
+    env.setdefault("MPICH_IO_DEBUG_LEVEL", "0")
+    return env
+
+
+# ---------------------------------------------------------------------------
+# OMPIO MCA environment builder  (Open MPI 4.x)
+# ---------------------------------------------------------------------------
+
+# Candidate keys -> full MCA variable names (io_ompio component).
+OMPIO_MCA_PREFIX = "io_ompio_"
+OMPIO_KNOWN_KEYS = {
+    "num_aggregators", "jobs_per_aggregator", "io_stripe_size",
+    "fb_data_size", "coll_opt", "periodic_file_sync", "fr_op",
+    "accumulate_use_single_file", "verbose",
+}
+
+
+def ompio_environment(mca_settings: Mapping[str, str]) -> dict:
+    """Map short candidate keys to ``OMPI_MCA_io_ompio_<key>`` variables.
+
+    Unknown keys are dropped with a warning (an bogus OMPI_MCA_* export is
+    ignored by mpirun anyway, but dropping keeps the feedback honest).
+    """
+    env = {}
+    for key, value in mca_settings.items():
+        bare = key[len(OMPIO_MCA_PREFIX):] if key.startswith(OMPIO_MCA_PREFIX) else key
+        if bare not in OMPIO_KNOWN_KEYS:
+            logger.warning("dropping unknown OMPIO MCA key %r", key)
+            continue
+        env[f"OMPI_MCA_{OMPIO_MCA_PREFIX}{bare}"] = str(value)
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Home isolation  (deployment host has NO writable $HOME)
+# ---------------------------------------------------------------------------
+
+#: Every cache/config/temp variable a Python/HPC stack is known to write to.
+_ISOLATED_VARS = [
+    ("HOME", ""),                       # synthetic home root itself
+    ("XDG_CACHE_HOME", ".cache"),
+    ("XDG_CONFIG_HOME", ".config"),
+    ("XDG_DATA_HOME", ".local/share"),
+    ("XDG_RUNTIME_DIR", ".runtime"),
+    ("HF_HOME", ".hf_cache"),
+    ("HF_DATASETS_CACHE", ".hf_cache/datasets"),
+    ("TRANSFORMERS_CACHE", ".hf_cache/transformers"),
+    ("TRITON_CACHE_DIR", ".triton"),
+    ("TORCH_EXTENSIONS_DIR", ".torch_extensions"),
+    ("NUMBA_CACHE_DIR", ".numba_cache"),
+    ("MPLCONFIGDIR", ".mpl"),
+    ("PIP_CACHE_DIR", ".pip_cache"),
+    ("TMPDIR", "tmp"),
+    ("MPI_TMPDIR", "tmp/mpi"),
+    ("OPAL_PREFIX_TMPDIR", "tmp/opal"),     # OMPI session dir fallback
+]
+
+
+def isolated_home(workspace_root: Path) -> dict:
+    """Create the synthetic-home cache tree and return its env dict.
+
+    These exports belong at the very top of every generated sbatch script so
+    that nothing (Slurm epilog tooling, python imports, IOR helpers, the
+    proxy client) ever tries to mkdir under the missing real $HOME.
+    """
+    root = Path(workspace_root)
+    root.mkdir(parents=True, exist_ok=True)
+    env = {}
+    for var, sub in _ISOLATED_VARS:
+        target = root if not sub else root / sub
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            target.chmod(0o770)
+        except OSError:
+            pass  # Lustre quirks / foreign ownership: not fatal
+        env[var] = str(target)
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Full job-environment assembly
+# ---------------------------------------------------------------------------
+
+
+def build_job_environment(
+    config: IoConfig,
+    workspace_root: Path,
+    hints_file: Optional[Path],
+    env_prefix_allowlist: Optional[list] = None,
+    home_subdir: str = ".fake_home",
+) -> dict:
+    """Assemble the complete environment dict injected into the Slurm script.
+
+    Order of precedence (later wins): isolated home -> engine settings ->
+    candidate extra_env (allowlisted).
+    """
+    env = isolated_home(Path(workspace_root) / home_subdir)
+
+    if config.engine == "romio":
+        env.update(romio_environment(hints_file))
+    else:
+        env.update(ompio_environment(config.ompio_mca))
+
+    for key, value in config.extra_env.items():
+        if env_prefix_allowlist and not key.startswith(tuple(env_prefix_allowlist)):
+            logger.warning("dropping extra_env %r (fails prefix allowlist)", key)
+            continue
+        env[key] = value
+
+    return env
+
+
+def render_env_exports(env: Mapping[str, str]) -> str:
+    """Render an env dict as ordered ``export K='V'`` shell lines."""
+    lines = []
+    for key in sorted(env):
+        value = str(env[key]).replace("'", "'\\''")  # POSIX single-quote escape
+        lines.append(f"export {key}='{value}'")
+    return "\n".join(lines)

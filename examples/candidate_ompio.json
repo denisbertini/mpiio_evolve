@@ -1,0 +1,16 @@
+{
+  "mpi_engine": "ompio",
+  "lustre": {
+    "stripe_count": 32,
+    "stripe_size": "1M"
+  },
+  "ompio": {
+    "num_aggregators": 8,
+    "jobs_per_aggregator": "auto",
+    "io_stripe_size": "1M",
+    "fb_data_size": "1M",
+    "coll_opt": 1,
+    "periodic_file_sync": 0
+  },
+  "extra_env": {}
+}

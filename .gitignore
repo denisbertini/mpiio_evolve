@@ -1,0 +1,21 @@
+# Runtime artifacts on the parallel filesystem -- never version these
+runs/
+.fake_home/
+.hf_cache/
+.triton/
+.numba_cache/
+.mpl/
+.pip_cache/
+tmp/
+torch_extensions/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Editor noise
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,8 @@
+# mpiio_evolve runtime dependencies (standard library covers the rest)
+PyYAML>=6.0
+
+# The evolutionary controller itself is deployed separately on the CPU
+# login/compute side; install it in its own environment:
+#   pip install git+https://github.com/codelion/openevolve.git
+# (or your internal fork). It communicates with this repo exclusively via
+# evaluate.py's function API or its FITNESS: stdout protocol.

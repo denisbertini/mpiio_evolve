@@ -1,0 +1,118 @@
+# =============================================================================
+# mpiio_evolve - Search Parameters & Cluster Declaration
+# =============================================================================
+# Everything in this file is consumed by evaluate.py. Values marked as a
+# "search space" are boundaries for the LLM-in-the-loop evolutionary
+# controller (OpenEvolve). Mutated candidates MUST stay inside these
+# boundaries; out-of-bounds candidates are rejected before hitting Slurm.
+#
+# HARD RULE: no path in this system may resolve to '~' or a real $HOME.
+# All scratch/cache/log locations are rooted at `workspace.root` (the
+# parallel filesystem working directory, resolved at runtime).
+# =============================================================================
+
+workspace:
+  # All run directories, hint files, caches and logs live under here.
+  # Relative paths are interpreted against the mpiio_evolve repo root.
+  root: "."
+  runs_subdir: "runs"          # per-candidate run directories
+  home_subdir: ".fake_home"    # synthetic $HOME exported into Slurm jobs
+  keep_data: false             # delete benchmark data files after each run
+  keep_runs: 200               # garbage-collect oldest run dirs beyond this
+
+cluster:
+  # ---- Slurm resource request (rendered into the #SBATCH header) ----------
+  partition: "compute"
+  account: "io_optimization"          # TODO: your Slurm account/allocation
+  qos: null                            # optional QoS
+  nodes: 1
+  tasks_per_node: 32
+  cpus_per_task: 1
+  mem_per_cpu: "4000M"
+  time_limit: "00:10:00"
+  constraint: null                     # e.g. "lustre" node feature tag
+  extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
+  # srun flags appended to the benchmark invocation
+  extra_srun_args: "-vv"
+  wait: true                           # block sbatch with --wait
+
+  # ---- MPI engine selection ------------------------------------------------
+  # romio : MPICH / Intel MPI / Cray MPICH -> ROMIO text hint file (MPIIO_HINTS)
+  # ompio : Open MPI 4.x OMPIO component  -> OMPI_MCA_* environment array
+  # auto  : probe `mpiexec --version` in evaluate.py, fall back to default_engine
+  mpi_engine: "auto"
+  default_engine: "romio"
+
+benchmark:
+  # Command template. Placeholders: {ntasks} {data_dir} {transfer_block}
+  # {block_size} {segment} {repetitions} {engine} {hints_file}
+  # NOTE: {hints_file} is only meaningful for the romio engine (the file also
+  # travels via the MPIIO_HINTS env var, which ROMIO reads automatically).
+  command: >-
+    IOR -a MPIIO
+    -t {transfer_block} -b {block_size} -s {segment}
+    -i {repetitions} -F -e -k -v 1
+    -o {data_dir}/iorfs
+  # The launcher prefixes this with `srun -n <ntasks> <extra_srun_args>`.
+  # ntasks defaults to cluster.nodes * cluster.tasks_per_node; uncomment to pin.
+  # ntasks: 32
+
+  transfer_block: "1M"     # IOR transfer size
+  block_size: "1G"         # IOR block size per task per file
+  segment: "4"             # IOR segment count (multiplier on block size)
+  repetitions: 3
+
+# =============================================================================
+# SEARCH SPACE - boundaries handed to the LLM mutation prompt
+# =============================================================================
+search_space:
+
+  lustre:
+    # `lfs setstripe -c <count> -S <size> <dir>` applied to the run data dir.
+    stripe_count: [-1, 1, 2, 4, 8, 16, 32, 56, 112]   # -1=broadcast, 0=fs default
+    stripe_size:  ["1M", "4M", "8M", "16M", "32M"]
+
+  romio:
+    # Keys land in the ROMIO text hints file (format: key=value per line).
+    # Reference: ROMIO README / MPICH internal hints documentation.
+    romio_cb_read:   ["automatic", "enable", "disable"]
+    romio_cb_write:  ["automatic", "enable", "disable"]
+    cb_nodes:        [1, 2, 4, 8, 16, 32]
+    cb_buffer_size:  ["131072", "262144", "1M", "4M", "8M"]
+    romio_ds_read:   ["automatic", "enable", "disable"]
+    romio_ds_write:  ["automatic", "enable", "disable"]
+    striping_count:  [null, 1, 2, 4, 8, 16, 32, 56]   # null = inherit Lustre layout
+    striping_unit:   [null, "64K", "1M", "4M", "8M"]  # null = inherit Lustre layout
+    no_io_anchors:   [null, true]
+    direct_io:       [null, "enable", "disable"]
+
+  ompio:
+    # Keys become OMPI_MCA_io_ompio_<key> environment variables (Open MPI 4.x).
+    num_aggregators:        [0, 1, 2, 4, 8, 16, 32]     # 0 = auto-select
+    jobs_per_aggregator:    [1, "auto", 2, 4, 8]
+    io_stripe_size:         ["1M", "4M", "8M", "16M"]
+    fb_data_size:           ["64K", "256K", "1M", "4M"] # frontier-backing granule
+    coll_opt:               [0, 1, 2, 4]                # collective optimization bitmask
+    periodic_file_sync:     [0, 1]
+
+  # Free-form escape hatch: the LLM may add env vars here, but ONLY keys
+  # matching env_prefix_allowlist are exported; anything else is dropped.
+  extra_env: {}
+  env_prefix_allowlist: ["I_", "ROMIO_", "FI_", "UCX_", "LUSTRE_", "PMI_", "MPIIO_"]
+
+# =============================================================================
+# FITNESS SHAPING
+# =============================================================================
+fitness:
+  # score = w_write * write_mibs + w_read * read_mibs   (0.0 on any crash)
+  # IOR reports Max and Mean; `prefer` chooses which pair to score.
+  prefer: "max"            # "max" | "mean"
+  weights:
+    write: 1.0
+    read: 0.5
+  # Multiplicative penalty when write throughput is unmeasured but read is
+  # (partial crash): score *= partial_credit
+  partial_credit: 0.25
+
+logging:
+  level: "INFO"

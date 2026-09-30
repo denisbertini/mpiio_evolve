@@ -1,0 +1,17 @@
+{
+  "mpi_engine": "romio",
+  "lustre": {
+    "stripe_count": 8,
+    "stripe_size": "4M"
+  },
+  "romio": {
+    "romio_cb_write": "enable",
+    "romio_cb_read": "automatic",
+    "cb_nodes": 16,
+    "cb_buffer_size": "4M",
+    "romio_ds_write": "disable",
+    "striping_count": null,
+    "striping_unit": null
+  },
+  "extra_env": {}
+}
