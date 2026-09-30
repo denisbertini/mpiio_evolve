@@ -1,77 +1,73 @@
 # mpiio_evolve
 
-LLM-in-the-loop evolutionary optimization of MPI-IO / Lustre storage stacks.
+**Evolutionary optimization of MPI-IO and Lustre storage layouts, driven by an
+LLM in the loop.**
 
-An [OpenEvolve](https://github.com/codelion/openevolve) controller on the CPU
-cluster mutates **I/O configuration candidates** (not code), submits
-micro-benchmarks to the local Slurm queue on a Lustre (`/scratch`) filesystem,
-and feeds measured MiB/sec plus *semantic crash feedback* back to a
-vLLM/Ollama-served model over the login-node reverse tunnel.
+`mpiio_evolve` is an autonomous search framework for HPC I/O tuning. An
+[OpenEvolve](https://github.com/codelion/openevolve) controller running on the
+CPU side of a Slurm cluster mutates *I/O configuration candidates* — Lustre
+striping layouts, ROMIO hints, Open MPI `io_ompio` MCA variables — submits
+micro-benchmarks (IOR, or a custom plasma physics simulation's I/O phase) to
+the local Slurm queue, measures achieved MiB/sec, and feeds both the numbers
+and *semantic crash diagnoses* back to a vLLM/Ollama-served model over an
+HTTP/SSE reverse-proxy tunnel from the login node to the GPU cluster.
+
+The unit of evolution is **configuration, not code**: every candidate is a
+small JSON/YAML mapping that stays inside explicit search boundaries declared
+in `config.yaml`.
+
+## Why this exists
+
+Lustre + MPI-IO tuning is a large, poorly documented, strongly coupled
+parameter space:
+
+* **Lustre layout** — `lfs setstripe -c <count> -S <size>` interacts with OST
+  count, file size, and access pattern.
+* **ROMIO** (MPICH / Intel MPI / Cray MPICH) — collective buffering hints
+  (`romio_cb_write`, `cb_nodes`, `cb_buffer_size`, `romio_ds_write`, …) live
+  in a plaintext hint file discovered through `MPIIO_HINTS`.
+* **OMPIO** (Open MPI 4.x) — the same intent is expressed as an entirely
+  different surface: `OMPI_MCA_io_ompio_num_aggregators`, `io_stripe_size`,
+  `fb_data_size`, `coll_opt`, …
+
+Grid search is unaffordable (each trial is a real batch job), and manual
+tuning stalls on cross-engine knowledge silos. An LLM-in-the-loop evolutionary
+search fills that gap: it proposes structured mutants, learns from *classified
+failure text* (OOM kills, rejected stripe layouts, ENOSPC, MPI launch
+failures), and converges on the throughput sweet spot for the actual
+filesystem under real contention.
+
+## Architecture
 
 ```
-                     ┌────────────────────────────────────────────┐
- CPU cluster         │  OpenEvolve controller                     │
- (login/compute)     │   mutation prompt  ◄── metrics + feedback  │
-        │            └──────────┬─────────────────▲───────────────┘
-        │ candidate dict        │                 │ FITNESS / EVAL_METRICS
-        ▼                       ▼                 │
-┌───────────────── mpiio_evolve ──────────────────┴───────────────┐
-│ evaluate.py ──► infrastructure.py ──► slurm_launcher.py         │
-│      │              Lustre layout       #SBATCH + env header    │
-│      │              ROMIO hints file    sbatch --wait           │
-│      │              OMPIO MCA env array                         │
-│      └──► parser.py ── MiB/sec extraction + error profiler ─────┘
-└──────────────────────────────────────────────────────────────────┘
-        │                                      ▲
-        ▼                                      │ stdout/stderr logs
-   Slurm compute nodes  ══ Lustre /scratch ══  vLLM/Ollama (GPU cluster,
-                                               via HTTP/SSE reverse proxy)
+   CPU cluster (login / controller)                    GPU cluster
+┌───────────────────────────────────────────┐   ┌──────────────────────┐
+│  OpenEvolve controller                    │   │  vLLM / Ollama       │
+│   prompt-massager ──► mutation request ───┼───┤  OpenAI-compatible   │
+│        ▲                                  │◄──┤  API over HTTP/SSE   │
+│        │ metrics + natural-language       │   │  reverse tunnel      │
+│        │ crash feedback                    │   └──────────────────────┘
+│  evaluate.py  ◄── candidate dict (JSON)    │
+│     │                                      │
+│     ├─► infrastructure.py   Lustre layout, ROMIO hint file,
+│     │                       OMPIO MCA env, synthetic $HOME, path jail
+│     ├─► slurm_launcher.py   #SBATCH compiler + `sbatch --wait`
+│     └─► parser.py           MiB/sec extraction + error profiler
+└──────────────┬─────────────────────────▲──┘
+               │ srun batch jobs          │ stdout/stderr logs
+               ▼                          │
+        Slurm compute nodes ═══ Lustre /scratch (all state lives here)
 ```
 
-## Modules
+### Module map
 
-| File | Responsibility |
+| Module | Responsibility |
 |---|---|
-| `config.yaml` | Search-space boundaries, Slurm resources, benchmark command, fitness shaping |
-| `infrastructure.py` | `lfs setstripe` control, ROMIO hint-file writer, `OMPI_MCA_io_ompio_*` env builder, synthetic-`$HOME` isolation |
-| `slurm_launcher.py` | Dynamic `#SBATCH` script compiler with cache-isolation header, blocking `sbatch --wait` submission |
-| `parser.py` | IOR/generic MiB/sec extraction; OOM / layout / MPI / ENOSPC / timeout stderr profiling into LLM-ready feedback text |
-| `evaluate.py` | Lifecycle driver; `EVAL_METRICS {json}` + `FITNESS: <score>` stdout protocol |
-
-## Hard invariants
-
-1. **No `$HOME`, ever.** The deployment host has no writable home directory.
-   Every cache (`HF_HOME`, `TRITON_CACHE_DIR`, `XDG_*`, `TMPDIR`, `MPI_TMPDIR`,
-   pip/numba/matplotlib caches …) is exported in the *sbatch script header*
-   into a synthetic `$HOME` under the workspace. All destructive operations
-   pass through `infrastructure.ensure_inside()` — a mutated candidate can
-   never touch paths outside `/scratch/.../mpiio_evolve`.
-2. **Dual engine.** `mpi_engine: romio|ompio|auto` selects between a ROMIO
-   plaintext hint file (`MPIIO_HINTS=…`, MPICH/Intel/Cray) and an
-   `OMPI_MCA_io_ompio_*` environment array (Open MPI 4.x). Unknown hint keys
-   are dropped with a warning instead of being exported.
-3. **The loop never dies.** Every failure mode yields `FITNESS: 0.0` plus a
-   classified natural-language explanation (`runs/<id>/feedback.txt` and
-   stderr), which is exactly what the mutation model needs to improve the
-   next generation.
-
-## Quick start
-
-```bash
-pip install -r requirements.txt
-
-# Offline smoke test (no Slurm/Lustre required -- synthesizes a
-# parameter-sensitive IOR log so you can validate the whole loop):
-python3 evaluate.py --candidate examples/candidate_romio.json --dry-run
-python3 evaluate.py --candidate examples/candidate_ompio.json --dry-run
-
-# On the real cluster (module load your MPI + IOR first, set account in config.yaml):
-python3 evaluate.py --candidate examples/candidate_romio.json
-```
-
-Every run produces `runs/<timestamp>-<hash>/` containing `submit.sh`
-(the exact script submitted, auditable), `mpiio_hints`, `stdout.log`,
-`stderr.log`, `result.json` (metrics + layout + feedback).
+| `config.yaml` | Search-space boundaries, Slurm resource request, benchmark command template, fitness shaping, workspace layout |
+| `infrastructure.py` | *Storage Hardware Modeler.* Applies `lfs setstripe -c {count} -S {size} {dir}`; writes ROMIO plaintext hint files; builds `OMPI_MCA_io_ompio_*` environment arrays; creates the synthetic `$HOME` cache tree; enforces `ensure_inside()` path isolation; whitelists known hints/keys |
+| `slurm_launcher.py` | *Dynamic Script Compiler.* Renders a complete `#SBATCH` script per run with the cache-isolation export header, submits it with `sbatch --parsable --wait` (job exit code propagates), and simulates submission when Slurm is absent |
+| `parser.py` | *Log Aggregator & Error Profiler.* Extracts Max/Mean write/read speeds (IOR and generic simulator formats, all units → MiB/sec); classifies stderr into OOM / LUSTRE_LAYOUT / ENOSPC / MPI_LAUNCH / TIMEOUT / HOME_WRITE / … with quoted log evidence formatted as LLM feedback |
+| `evaluate.py` | *OpenEvolve entrypoint.* Validates the candidate, drives the full lifecycle, scores fitness, garbage-collects old runs, and speaks the `EVAL_METRICS {json}` + `FITNESS: <score>` stdout protocol |
 
 ## Candidate schema
 
@@ -79,42 +75,136 @@ Every run produces `runs/<timestamp>-<hash>/` containing `submit.sh`
 {
   "mpi_engine": "romio",
   "lustre":  { "stripe_count": 8, "stripe_size": "4M" },
-  "romio":   { "romio_cb_write": "enable", "cb_nodes": 16, "cb_buffer_size": "4M" },
-  "ompio":   { "num_aggregators": 8, "io_stripe_size": "1M" },
+  "romio":   { "romio_cb_write": "enable", "cb_nodes": 16, "cb_buffer_size": "4M",
+               "romio_ds_write": "disable" },
+  "ompio":   { "num_aggregators": 8, "io_stripe_size": "1M", "fb_data_size": "1M" },
   "extra_env": { "FI_OFI_RX_SIZE": "16384" }
 }
 ```
 
-Values must lie inside the boundaries declared in `config.yaml → search_space`;
-out-of-bounds candidates are rejected pre-submission with a feedback message.
-`extra_env` keys must match `env_prefix_allowlist`.
+* Every value must lie inside `config.yaml → search_space`; out-of-bounds
+  mutants are rejected *before* submission with corrective feedback text.
+* Unknown hint keys are dropped with a warning — a hallucinated hint can never
+  silently reach the wire.
+* `extra_env` keys must match `env_prefix_allowlist` (e.g. `I_`, `ROMIO_`,
+  `FI_`, `UCX_`, `MPIIO_`).
+* `mpi_engine` selects the dual-engine surface: `romio` (hint file +
+  `MPIIO_HINTS=…`), `ompio` (`OMPI_MCA_io_ompio_*` exports), or `auto`
+  (probe `mpiexec --version`).
+
+## Fitness protocol
+
+```
+EVAL_METRICS {"score": 2066.25, "write_mib_sec": 1406.44, "read_mib_sec": 1319.62, ...}
+FITNESS: 2066.2500
+```
+
+`score = w_write·max_write + w_read·max_read` (weights and `max|mean` choice
+live under `fitness:` in `config.yaml`). Any crash yields `FITNESS: 0.0` — and
+never a dead loop: the exit code is always 0 for the controller, and the
+reason for failure is delivered three ways:
+
+1. stderr (captured by the controller),
+2. `runs/<id>/feedback.txt` (classified, LLM-ready prose),
+3. `runs/<id>/result.json` → `context.feedback`.
+
+Example feedback a mutant receives after an OOM:
+
+> `[OOM]` The job was OOM-killed: per-rank memory footprint exceeded the
+> `--mem-per-cpu` allocation. Reduce buffer sizes (`cb_buffer_size`,
+> `fb_data_size`) or aggregate fewer ranks per node. *(+ quoted log evidence)*
+
+## Hard invariants
+
+1. **No `$HOME`, ever.** The deployment host has no writable home directory.
+   Every generated batch script begins with an export block redirecting
+   `HOME`, `HF_HOME`, `TRITON_CACHE_DIR`, `TORCH_EXTENSIONS_DIR`,
+   `NUMBA_CACHE_DIR`, `MPLCONFIGDIR`, `PIP_CACHE_DIR`, `XDG_*`, `TMPDIR`,
+   `MPI_TMPDIR`, … into `.fake_home/` inside the Lustre workspace.
+2. **Path jail.** All filesystem mutations pass through
+   `infrastructure.ensure_inside()`: no candidate, log path, or cleanup
+   operation can resolve outside the repository root on `/scratch`.
+3. **The loop never dies.** Validation errors, `lfs` rejections, scheduler
+   failures and novel crash modes all degrade to `FITNESS: 0.0` plus feedback.
+4. **Auditable runs.** Each attempt is a self-contained `runs/<timestamp>-<hash>/`
+   holding the exact `submit.sh` submitted, the materialized `mpiio_hints`,
+   `stdout.log`, `stderr.log`, `result.json` and (on failure) `feedback.txt`.
+   Data files are deleted after scoring unless `workspace.keep_data: true`;
+   old runs are garbage-collected beyond `workspace.keep_runs`.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt          # PyYAML; everything else is stdlib
+
+# Offline validation (no Slurm/Lustre needed). --dry-run renders the real
+# submit.sh and synthesizes a parameter-sensitive IOR log so the whole
+# measure → score → feedback loop can be exercised on a dev machine:
+python3 evaluate.py --candidate examples/candidate_romio.json --dry-run
+python3 evaluate.py --candidate examples/candidate_ompio.json --dry-run
+
+# On the cluster (module load your MPI + IOR; set account in config.yaml):
+python3 evaluate.py --candidate examples/candidate_romio.json
+python3 evaluate.py --candidate - --dry-run < my_mutant.json   # JSON via stdin
+```
 
 ## OpenEvolve integration
 
-* **Function API** — import `evaluate(candidate: dict) -> dict[str, float]`
-  and point OpenEvolve's evaluator at it. Metrics: `score`, `write_mib_sec`,
-  `read_mib_sec`, `job_exit_code`, `runtime_sec`.
-* **Subprocess API** — run `python evaluate.py --candidate <json>` and scrape
-  the final `FITNESS: <float>` line. Crash feedback is on stderr and in
-  `result.json:context.feedback`; wire that field into your prompt-massager
-  so the LLM sees *why* a mutant scored 0.
+* **Subprocess API** — run `python evaluate.py --candidate <json>` per trial
+  and scrape the `FITNESS:` line; attach `result.json:context.feedback` to the
+  next mutation prompt.
+* **Function API** — `from evaluate import evaluate`;
+  `evaluate(candidate: dict) -> dict[str, float]` returns numeric metrics
+  (`score`, `write_mib_sec`, `read_mib_sec`, `job_exit_code`, `runtime_sec`).
 
-Suggested prompt hook: append to the mutation system prompt
+Suggested mutation-prompt preamble:
 
-> You are evolving Lustre/MPI-IO configurations. Previous generation failures:
-> {feedback} — adjust stripe_count, ROMIO collective buffering hints, or
-> OMPIO aggregator counts accordingly. Stay inside the declared search space.
+> You are evolving Lustre/MPI-IO configurations for a plasma-physics I/O
+> benchmark. Previous-generation failures: {feedback}. Adjust stripe_count,
+> ROMIO collective-buffering hints, or OMPIO aggregator counts accordingly.
+> Stay strictly inside the declared search space.
 
-## Tuning notes for Lustre + MPI-IO
+## Tuning notes (Lustre + MPI-IO)
 
-* `stripe_count` should generally sit near a divisor of your OST count; `-1`
-  (broadcast, small files) and `0` (filesystem default) are legal probes.
-* ROMIO: `romio_cb_write=enable` + `cb_nodes≈#OSTs` is the classic Lustre
+* `stripe_count` generally wants to sit near a divisor of the filesystem's OST
+  count; `-1` (broadcast) and `0` (fs default) are legal probes for small or
+  metadata-heavy files.
+* ROMIO: `romio_cb_write=enable` with `cb_nodes ≈ #OSTs` is the classic Lustre
   sweet spot; `romio_ds_write=disable` avoids the data-sieving scratch-file
   dance on shared filesystems.
-* OMPIO: `num_aggregators≈OST count` with `io_stripe_size` matching the
-  Lustre stripe size; `fb_data_size` trades memory for frontier coalescing —
-  the OOM profiler explicitly points here when it fires.
-* Fitness is `w_write·max_write + w_read·max_read` (see `fitness:` in
-  `config.yaml`), so read-side regressions from over-aggressive
-  `romio_cb_read` choices are penalized automatically.
+* OMPIO: set `num_aggregators ≈ OST count` and match `io_stripe_size` to the
+  Lustre stripe size; `fb_data_size` trades rank memory for frontier
+  coalescing — the OOM profiler explicitly points here when it fires.
+* Read-side regressions from over-aggressive `romio_cb_read` choices are
+  penalized automatically via the `w_read` fitness weight.
+
+## Repo layout
+
+```
+mpiio_evolve/
+├── config.yaml                 # search space + cluster declaration (edit me)
+├── infrastructure.py           # Lustre / ROMIO / OMPIO translation blocks
+├── slurm_launcher.py           # sbatch script compiler + --wait submit
+├── parser.py                   # throughput regexes + error profiler
+├── evaluate.py                 # OpenEvolve entrypoint (FITNESS: protocol)
+├── examples/
+│   ├── candidate_romio.json    # MPICH/Intel/Cray starting candidate
+│   └── candidate_ompio.json    # Open MPI starting candidate
+├── runs/                       # per-run artifacts (gitignored)
+└── .fake_home/                 # synthetic $HOME cache tree (gitignored)
+```
+
+## Roadmap
+
+- [ ] `prompts/` templates encoding Lustre domain priors for the mutator
+- [ ] Native OpenEvolve evaluator config wired to the subprocess protocol
+- [ ] Multi-client sweep (vary `tasks_per_node` as an evolved dimension)
+- [ ] `lfs df`/MDC-contention telemetry folded into the fitness signal
+- [ ] Read-phase-only and weak/strong-read benchmark modes for the physics sim
+
+## Requirements
+
+* Python ≥ 3.9, PyYAML (rest is standard library)
+* Real runs: Slurm (`sbatch ≥ 17.02` for `--parsable --wait`), Lustre client
+  (`lfs`), IOR (or any benchmark whose stdout matches the parser patterns)
+* Controller side: OpenEvolve + an OpenAI-compatible endpoint (vLLM/Ollama)
