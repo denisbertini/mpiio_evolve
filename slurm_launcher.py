@@ -9,7 +9,7 @@ Assembles a cluster-native sbatch shell script on the fly for each candidate:
     #SBATCH -o <run>/stdout.log -e <run>/stderr.log
 
     # ---- hard $HOME isolation header (NO real home dir exists) ----
-    export HOME=/scratch/.../.fake_home
+    export HOME=/lustre/rz/dbertini2/<state>/.fake_home
     export HF_HOME=... .triton ... XDG_* ... TMPDIR ...
     # ---- engine settings (MPIIO_HINTS file or OMPI_MCA_* array) ----
 

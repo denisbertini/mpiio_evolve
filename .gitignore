@@ -25,3 +25,9 @@ images/
 logs/
 .apptainer_cache/
 .apptainer*
+
+# Local dev fallback state (used when /lustre is unreachable)
+.dev_state/
+# Controller venv (lives on the parallel filesystem)
+.controller_env/
+.uv_cache/

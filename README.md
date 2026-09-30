@@ -56,7 +56,7 @@ filesystem under real contention.
 └──────────────┬─────────────────────────▲──┘
                │ srun batch jobs          │ stdout/stderr logs
                ▼                          │
-        Slurm compute nodes ═══ Lustre /scratch (all state lives here)
+        Slurm compute nodes ═══ Lustre /lustre/rz/dbertini2 (all state) ══
 ```
 
 ### Module map
@@ -91,8 +91,8 @@ srun --mpi=pmix -n <ntasks> apptainer exec --home <ws>/.fake_home \
      --contain --bind <ws>  images/current.sif  <benchmark command>
 ```
 
-Build the image **on the login node** (the def needs ~40 GB of scratch, not
-`$HOME` — the script guarantees this):
+Build the image **on the login node** (the def needs ~40 GB of Lustre space,
+not `$HOME` — the script guarantees this):
 
 ```bash
 ./container/build_container.sh            # auto mode: root / --fakeroot / --sudo
@@ -158,13 +158,21 @@ Example feedback a mutant receives after an OOM:
    Every generated batch script begins with an export block redirecting
    `HOME`, `HF_HOME`, `TRITON_CACHE_DIR`, `TORCH_EXTENSIONS_DIR`,
    `NUMBA_CACHE_DIR`, `MPLCONFIGDIR`, `PIP_CACHE_DIR`, `XDG_*`, `TMPDIR`,
-   `MPI_TMPDIR`, … into `.fake_home/` inside the Lustre workspace.
-2. **Path jail.** All filesystem mutations pass through
-   `infrastructure.ensure_inside()`: no candidate, log path, or cleanup
-   operation can resolve outside the repository root on `/scratch`.
+   `MPI_TMPDIR`, … into `<state_dir>/.fake_home/` inside the Lustre
+   state directory.
+2. **Deployment root & per-launcher state directory.** All mutable state
+   lives under `<DEPLOY_ROOT>/<state_dir>` — on Virgo2,
+   `/lustre/rz/dbertini2/<state_dir>` (there is no `/scratch`). Each user or
+   controller instance launches with its own state directory
+   (`--state-dir NAME`, `MPIIO_EVOLVE_STATE_DIR`, or `workspace.state_dir`),
+   so concurrent evolutions never collide. All filesystem mutations pass
+   through `infrastructure.ensure_inside()`: no candidate, log path, or
+   cleanup operation can resolve outside its own state directory. Off-cluster
+   `--dry-run` invocations fall back to `.dev_state/<state_dir>` in the repo.
 3. **The loop never dies.** Validation errors, `lfs` rejections, scheduler
    failures and novel crash modes all degrade to `FITNESS: 0.0` plus feedback.
-4. **Auditable runs.** Each attempt is a self-contained `runs/<timestamp>-<hash>/`
+4. **Auditable runs.** Each attempt is a self-contained
+   `<state_dir>/runs/<timestamp>-<hash>/`
    holding the exact `submit.sh` submitted, the materialized `mpiio_hints`,
    `stdout.log`, `stderr.log`, `result.json` and (on failure) `feedback.txt`.
    Data files are deleted after scoring unless `workspace.keep_data: true`;
@@ -174,7 +182,7 @@ Example feedback a mutant receives after an OOM:
 
 | Where | What runs | Python need |
 |---|---|---|
-| **Login node** (has `$HOME`) | OpenEvolve controller + `evaluate.py` / `infrastructure.py` / `slurm_launcher.py` / `parser.py`, `lfs setstripe`, `sbatch --wait` | **frozen system Python 3.9, zero dependencies** |
+| **Login node** (has `$HOME`) | OpenEvolve controller + `evaluate.py` / `infrastructure.py` / `slurm_launcher.py` / `parser.py`, `lfs setstripe`, `sbatch --wait` | **frozen system Python 3.9, zero dependencies** (optional Lustre venv via `tools/bootstrap_controller.sh`) |
 | **Compute nodes** (NO `$HOME`) | only the benchmark, inside `images/current.sif` (`srun apptainer exec …`) | none — the launcher never executes there |
 
 Because the compute-side `$HOME` does not exist, the generated batch script's
@@ -198,10 +206,14 @@ The heavy Python stack (OpenEvolve, `openai` client) must **not** go into the
 plasma `.def` (it is rebuilt only for physics changes, and it never hosts
 `sbatch`/`lfs` work). Two supported shapes:
 
-1. **Login-node venv (simplest):** `$HOME` exists on the login node, but keep
-   the env on scratch anyway: `python3 -m venv .controller_env &&
-   .controller_env/bin/pip install openevolve openai`. OpenEvolve supports
-   Python ≥ 3.9, so the system interpreter suffices.
+1. **Lustre venv (recommended):** `./tools/bootstrap_controller.sh
+   --openevolve` creates `.controller_env/` with every cache pinned into the
+   workspace (`$HOME` untouched, `lfs setstripe -c 4` on the venv for
+   small-file fan-out) and best-effort PyYAML — the evaluator still works if
+   the install fails offline. Launch with `tools/run_controller.sh` inside
+   tmux; it defaults `MPIIO_EVOLVE_STATE_DIR=$USER` and points
+   `OPENAI_API_BASE` at the login-node tunnel. OpenEvolve supports Python
+   ≥ 3.9, so the frozen system interpreter suffices.
 2. **Thin controller container + mailbox:** a small `python:3.12-slim`-based
    image runs OpenEvolve only; it never calls `sbatch`. It writes candidate
    JSON into `queue/pending/`; a pure-stdlib 3.9 host process (`evaluate.py`)
@@ -215,10 +227,14 @@ plasma `.def` (it is rebuilt only for physics changes, and it never hosts
 pip install PyYAML                        # only for the fuller YAML parser
 
 # Offline validation (no Slurm/Lustre needed). --dry-run renders the real
-# submit.sh and synthesizes a parameter-sensitive IOR log so the whole
-# measure → score → feedback loop can be exercised on a dev machine:
+# submit.sh and synthesizes a parameter-sensitive IOR log; if the configured
+# Lustre root is unreachable it falls back to .dev_state/<state_dir>/:
 python3 evaluate.py --candidate examples/candidate_romio.json --dry-run
-python3 evaluate.py --candidate examples/candidate_ompio.json --dry-run
+
+# Per-launcher state directory under the Lustre deployment root
+# (/lustre/rz/dbertini2/<you>):
+python3 evaluate.py --candidate examples/candidate_romio.json --state-dir "$USER"
+# Dev machine without /lustre:  --root .   (state goes into the repo)
 
 # On the cluster: build the image once (login node), then:
 ./container/build_container.sh
@@ -278,8 +294,9 @@ mpiio_evolve/
 │   ├── candidate_romio.json    # ROMIO-engine starting candidate (romio341 too)
 │   └── candidate_ompio.json    # Open MPI io_ompio starting candidate
 ├── images/                     # .sif images + current.sif symlink (gitignored)
-├── runs/                       # per-run artifacts (gitignored)
-└── .fake_home/                 # synthetic $HOME cache tree (gitignored)
+├── .controller_env/            # Lustre venv for controller (gitignored)
+└── <state_dir>/                # per-launcher state at workspace.root, e.g.
+    ├── runs/  tmp/  .fake_home/   /lustre/rz/dbertini2/alice/...
 ```
 
 ## Roadmap

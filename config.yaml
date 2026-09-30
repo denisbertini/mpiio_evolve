@@ -12,9 +12,18 @@
 # =============================================================================
 
 workspace:
-  # All run directories, hint files, caches and logs live under here.
-  # Relative paths are interpreted against the mpiio_evolve repo root.
-  root: "."
+  # Deployment root on the parallel filesystem. On Virgo2 this is the RZ
+  # project area on Lustre (there is NO /scratch here). Override per shell
+  # with MPIIO_EVOLVE_ROOT or per call with --root (e.g. '--root .' for
+  # offline development on a machine without /lustre).
+  root: "/lustre/rz/dbertini2"
+
+  # Every launcher invocation works inside its OWN state directory:
+  #     <root>/<state_dir>/{runs, .fake_home, tmp, ...}
+  # Pick one per user/controller instance so concurrent evolutions never
+  # collide. Override: MPIIO_EVOLVE_STATE_DIR, --state-dir, or edit here.
+  state_dir: "default"
+
   runs_subdir: "runs"          # per-candidate run directories
   home_subdir: ".fake_home"    # synthetic $HOME exported into Slurm jobs
   keep_data: false             # delete benchmark data files after each run

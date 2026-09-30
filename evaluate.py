@@ -35,6 +35,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -165,9 +166,53 @@ def _probe_mpi(container: str) -> Optional[str]:
     return result
 
 
-def workspace_root(cfg: Mapping) -> Path:
-    root = Path(cfg.get("workspace", {}).get("root", "."))
-    return (root if root.is_absolute() else REPO_ROOT / root).resolve()
+def resolve_workspace(cfg: Mapping, state_dir: Optional[str] = None,
+                      create: bool = True, fallback_local: bool = True) -> Path:
+    """Resolve (and optionally create) the per-launcher STATE DIRECTORY.
+
+    Layout on the parallel filesystem::
+
+        <DEPLOY_ROOT>/<state_dir>/          (e.g. /lustre/rz/dbertini2/alice)
+        ├── runs/        per-candidate run directories
+        ├── .fake_home/  synthetic $HOME exported into every job
+        └── tmp/         TMPDIR for jobs, apptainer, pip ...
+
+    Precedence -- DEPLOY_ROOT: --root > MPIIO_EVOLVE_ROOT > config
+    workspace.root; state dir: --state-dir > MPIIO_EVOLVE_STATE_DIR > config
+    workspace.state_dir. Everything below the state directory is protected by
+    ensure_inside(); DEPLOY_ROOT itself is shared but never mutated directly.
+
+    If DEPLOY_ROOT is not creatable (e.g. a dev machine without /lustre) and
+    fallback_local is set (dry-run/dev context), a .dev_state/<state_dir>
+    under the repo is used with a loud warning instead of failing.
+    """
+    ws_cfg = cfg.get("workspace", {}) or {}
+    root = os.environ.get("MPIIO_EVOLVE_ROOT") or str(ws_cfg.get("root", "."))
+    root_path = Path(root)
+    if not root_path.is_absolute():
+        root_path = (REPO_ROOT / root_path)
+
+    sd = (state_dir or os.environ.get("MPIIO_EVOLVE_STATE_DIR")
+          or str(ws_cfg.get("state_dir") or "default"))
+    if os.sep in sd or (os.altsep and os.altsep in sd) or ".." in sd:
+        raise ValueError(f"state_dir must be a simple name, got {sd!r}")
+
+    ws = root_path / sd
+    if create:
+        try:
+            ws.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            if not fallback_local:
+                raise RuntimeError(
+                    f"cannot create state directory {ws}: {exc}. Set "
+                    f"--root/MPIIO_EVOLVE_ROOT to a writable parallel-filesystem "
+                    f"path, or use --dry-run on a development machine.") from exc
+            local = (REPO_ROOT / ".dev_state" / sd).resolve()
+            logger.warning("state directory %s unavailable (%s) -- "
+                           "falling back to local %s", ws, exc, local)
+            local.mkdir(parents=True, exist_ok=True)
+            return local
+    return ws.resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +257,15 @@ def _synthetic_ior_log(io_cfg: IoConfig, ntasks: int) -> str:
 
 def evaluate(candidate: Mapping[str, Any],
              config_path: Path = DEFAULT_CONFIG,
-             dry_run: Optional[bool] = None) -> dict:
+             dry_run: Optional[bool] = None,
+             state_dir: Optional[str] = None) -> dict:
     """Evaluate one I/O configuration candidate. Never raises on bad input."""
     started = time.monotonic()
     cfg = load_config(config_path)
-    ws = workspace_root(cfg)
+    # Decide dry-run ONCE: explicit flag or missing Slurm. Governs launcher,
+    # container checks, probes AND workspace fallback on dev machines.
+    simulate = bool(dry_run) or shutil.which("sbatch") is None
+    ws = resolve_workspace(cfg, state_dir=state_dir, fallback_local=simulate)
     ws_cfg = cfg.get("workspace", {})
     fit_cfg = cfg.get("fitness", {})
     bench_cfg = cfg.get("benchmark", {})
@@ -233,10 +282,6 @@ def evaluate(candidate: Mapping[str, Any],
 
     try:
         # -- 1. validate ------------------------------------------------------
-        # Decide dry-run ONCE: explicit flag or missing Slurm. The same
-        # decision governs the launcher, the container checks and probes.
-        simulate = bool(dry_run) or shutil.which("sbatch") is None
-
         container = container_prefix(cfg, ws, REPO_ROOT)
         probe_prefix = ""
         if container and not simulate:
@@ -335,6 +380,7 @@ def evaluate(candidate: Mapping[str, Any],
     context = {
         "run_id": run_id,
         "run_dir": str(run_dir),
+        "state_workspace": str(ws),
         "engine": engine,
         "benchmark_profile": profile_name,
         "layout": layout_desc,
@@ -465,6 +511,12 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     ap.add_argument("--dry-run", action="store_true",
                     help="render scripts + synthesize a benchmark log (no Slurm/Lustre)")
+    ap.add_argument("--root", default=None,
+                    help="deployment root on the parallel filesystem "
+                         "(default: config workspace.root; env MPIIO_EVOLVE_ROOT)")
+    ap.add_argument("--state-dir", default=None,
+                    help="per-launcher state directory under the root "
+                         "(env MPIIO_EVOLVE_STATE_DIR)")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args(argv)
 
@@ -481,8 +533,11 @@ def main(argv: Optional[list] = None) -> int:
         print(f"[CONFIG_ERROR] could not load candidate: {exc}", file=sys.stderr)
         return 0                                             # never break the loop
 
+    if args.root:
+        os.environ["MPIIO_EVOLVE_ROOT"] = args.root
     evaluate(candidate, config_path=Path(args.config),
-             dry_run=True if args.dry_run else None)
+             dry_run=True if args.dry_run else None,
+             state_dir=args.state_dir)
     return 0
 
 

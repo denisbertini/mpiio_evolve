@@ -4,7 +4,7 @@
 #
 # Builds container/plasma_pp.def (OpenMPI 5.0.7/romio341 + UCX + Lustre
 # client + HDF5 + ADIOS2 + openPMD + EPOCH + WarpX + IOR + OSU) entirely
-# inside the /scratch workspace:
+# inside the Lustre workspace (repo + caches):
 #
 #   * synthetic HOME            -> .fake_home/
 #   * build temp                -> tmp/

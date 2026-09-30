@@ -1,6 +1,7 @@
 {
   "workspace": {
-    "root": ".",
+    "root": "/lustre/rz/dbertini2",
+    "state_dir": "default",
     "runs_subdir": "runs",
     "home_subdir": ".fake_home",
     "keep_data": false,
