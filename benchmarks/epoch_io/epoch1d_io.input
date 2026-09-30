@@ -1,0 +1,117 @@
+! ----------------------------------------------------------------------
+! mpiio_evolve checkpoint-stress deck for EPOCH1D (v4.19.x)
+!
+! Purpose: a physically sane laser-solid interaction whose wallclock is
+! dominated by MPI-IO diagnostics, so stripe/hint mutations change the
+! measured bandwidth. Frequent full field+particle dumps over a dense
+! 1D grid approximate the checkpoint cadence of production runs.
+!
+! TUNE ME against your real work: nx, number_per_cell, dt_save_particles
+! and stop_at_step. Keep the total SDF output per trial >= ~1 GiB so the
+! Lustre stripe layout dominates over metadata costs.
+! ----------------------------------------------------------------------
+
+begin:constants
+  c = 1.0
+  eps0 = 1.0
+  mass_elc = 1.0
+  electron_density = 0.2
+end:constants
+
+begin:particle:electrons
+  number = 1.0
+  particle_mass = 1.0
+  particle_charge = -1.0
+end:particle:electrons
+
+begin:particle:ions
+  number = 1.0
+  particle_mass = 1836.0
+  particle_charge = 1.0
+end:particle:ions
+
+begin:control
+  grid_ndim = 1
+  x_min = 0.0
+  x_max = 400.0*c/omega_pe
+  nx = 8000
+end:control
+
+begin:densityprofile
+  type = constant_density_profile
+  species = electrons
+  n = electron_density
+  fraction = 1.0
+  L = 200.0*c/omega_pe
+  start = 150.0*c/omega_pe
+  number_per_cell = 300
+end:densityprofile
+
+begin:densityprofile
+  type = constant_density_profile
+  species = ions
+  n = electron_density
+  fraction = 1.0
+  L = 200.0*c/omega_pe
+  start = 150.0*c/omega_pe
+  number_per_cell = 300
+end:densityprofile
+
+begin:temperature
+  type = temperature
+  species = electrons
+  T = 10.0
+end:temperature
+
+begin:temperature
+  type = temperature
+  species = ions
+  T = 0.0
+end:temperature
+
+begin:laser
+  type = laser_pulse
+  E0 = 0.05*5.0
+  a0 = 5.0
+  omega = 1.0
+  rise = 15.0
+  width = 10.0
+  polarization = 90d
+  t_start = 100.0
+  f_l = 1.0
+  lo = 75.0*c/omega_pe
+  hi = 125.0*c/omega_pe
+end:laser
+
+begin:external_fields
+  type3 = linear
+  E3line1 = 0.0
+  E3line2 = 0.0
+  E3space = 0.0
+end:external_fields
+
+begin:simulate
+  stop_at_time = -1.0
+  stop_at_step = 1500
+  dt_multiplier = 0.995
+  epsilon0 = eps0
+end:simulate
+
+! Diagnostics: full snapshots every 100 steps.
+! NOTE: exact dump-cadence variable names differ slightly between EPOCH
+! versions (dt_save_particles / dt_diag_* / dump blocks). Verify against
+! your production decks; the runner only requires *.sdf files to appear.
+begin:control
+  dt_diag_energy = 50
+  dt_save_particles = 100
+  dt_boundary_particles = 100
+  dt_boundary_fields = 100
+  smooth_current = .true.
+end:control
+
+begin:simulate
+  random_y_particles = 0.0
+  random_z_particles = 0.0
+end:simulate
+
+end

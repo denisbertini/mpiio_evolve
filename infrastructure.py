@@ -320,6 +320,11 @@ _ISOLATED_VARS = [
     ("TMPDIR", "tmp"),
     ("MPI_TMPDIR", "tmp/mpi"),
     ("OPAL_PREFIX_TMPDIR", "tmp/opal"),     # OMPI session dir fallback
+    # Apptainer/Singularity client-side state (exec of the plasma image)
+    ("APPTAINER_CACHEDIR", ".apptainer_cache"),
+    ("SINGULARITY_CACHEDIR", ".apptainer_cache"),
+    ("APPTAINER_TMPDIR", "tmp/apptainer"),
+    ("SINGULARITY_TMPDIR", "tmp/apptainer"),
 ]
 
 
@@ -366,6 +371,10 @@ def build_job_environment(
     if config.engine == "romio":
         env.update(romio_environment(hints_file))
     else:
+        # The plasma image defaults to OMPI_MCA_io=romio341 (embedded
+        # ROMIO). An explicit ompio candidate must switch the io
+        # component, else all OMPI_MCA_io_ompio_* vars would be inert.
+        env["OMPI_MCA_io"] = "ompio"
         env.update(ompio_environment(config.ompio_mca))
 
     for key, value in config.extra_env.items():
@@ -384,3 +393,30 @@ def render_env_exports(env: Mapping[str, str]) -> str:
         value = str(env[key]).replace("'", "'\\''")  # POSIX single-quote escape
         lines.append(f"export {key}='{value}'")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Container execution prefix (Apptainer/Singularity plasma image)
+# ---------------------------------------------------------------------------
+
+
+def container_prefix(cfg: Mapping[str, Any], workspace_root: Path,
+                     repo_root: Path) -> str:
+    """Build the ``apptainer exec ...`` prefix for benchmark commands.
+
+    Returns "" when containerization is disabled. ``--home`` pins the
+    in-container HOME to the synthetic scratch home (the real user home does
+    not exist), and the workspace is bind-mounted so hint files, decks and
+    data directories are visible to the containerized ranks.
+    """
+    c = cfg.get("container") or {}
+    if not c.get("enabled"):
+        return ""
+    runtime = str(c.get("runtime", "apptainer"))
+    image = Path(str(c.get("image", "images/current.sif")))
+    if not image.is_absolute():
+        image = (Path(repo_root) / image).resolve()
+    home = (Path(workspace_root)
+            / str((cfg.get("workspace") or {}).get("home_subdir", ".fake_home")))
+    opts = str(c.get("exec_opts", "--contain")).format(workspace=str(workspace_root))
+    return f"{runtime} exec --home {home} {opts} {image}"

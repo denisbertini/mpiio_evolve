@@ -32,8 +32,9 @@ cluster:
   time_limit: "00:10:00"
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
-  # srun flags appended to the benchmark invocation
-  extra_srun_args: "-vv"
+  # srun flags appended to the benchmark invocation. --mpi=pmix matches the
+  # image's PMIx 5 (srun_direct container mode).
+  extra_srun_args: "--mpi=pmix"
   wait: true                           # block sbatch with --wait
 
   # ---- MPI engine selection ------------------------------------------------
@@ -43,24 +44,50 @@ cluster:
   mpi_engine: "auto"
   default_engine: "romio"
 
+container:
+  # All benchmark ranks run INSIDE the plasma-physics Apptainer image
+  # (built by container/build_container.sh on the login node).
+  enabled: true
+  runtime: apptainer             # apptainer | singularity
+  image: "images/current.sif"    # symlink refreshed by the build script
+  # Extra `exec` options. --contain keeps the container hermetic (no bind of
+  # the nonexistent /home); {workspace} is substituted with the scratch root.
+  # The framework additionally injects `--home <ws>/.fake_home` automatically.
+  exec_opts: "--contain --bind {workspace}"
+  # srun_direct: Slurm launches one containerized rank per task via PMI(x).
+  # Requires Slurm >= 23.02 with --mpi=pmix to match the image's PMIx 5.
+  # Set cluster.extra_srun_args to "--mpi=pmix" accordingly.
+  mpi_mode: "srun_direct"
+
 benchmark:
-  # Command template. Placeholders: {ntasks} {data_dir} {transfer_block}
-  # {block_size} {segment} {repetitions} {engine} {hints_file}
-  # NOTE: {hints_file} is only meaningful for the romio engine (the file also
-  # travels via the MPIIO_HINTS env var, which ROMIO reads automatically).
-  command: >-
-    IOR -a MPIIO
-    -t {transfer_block} -b {block_size} -s {segment}
-    -i {repetitions} -F -e -k -v 1
-    -o {data_dir}/iorfs
-  # The launcher prefixes this with `srun -n <ntasks> <extra_srun_args>`.
-  # ntasks defaults to cluster.nodes * cluster.tasks_per_node; uncomment to pin.
+  # Active profile -> REAL-APPLICATION fitness (EPOCH checkpoints).
+  # Switch to "ior_canary" for Lustre health checks / debugging, or let a
+  # candidate override with {"benchmark_profile": "ior_canary"}.
+  active: "epoch_io"
+  # ntasks defaults to cluster.nodes * cluster.tasks_per_node.
   # ntasks: 32
 
-  transfer_block: "1M"     # IOR transfer size
-  block_size: "1G"         # IOR block size per task per file
-  segment: "4"             # IOR segment count (multiplier on block size)
-  repetitions: 3
+  profiles:
+    epoch_io:
+      # Checkpoint-stress EPOCH1D run. The rank-aware wrapper measures total
+      # SDF diagnostic volume / wall time and prints the generic line
+      #   "aggregate write bandwidth: <x> GiB/s"
+      # which parser.py scores. Tune benchmarks/epoch_io/epoch1d_io.input to
+      # mirror your production checkpoint cadence.
+      command: "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
+
+    ior_canary:
+      # Classic Lustre sanity probe: independent files, fsync on write.
+      # Placeholders: {transfer_block} {block_size} {segment} {repetitions}
+      command: >-
+        IOR -a MPIIO
+        -t {transfer_block} -b {block_size} -s {segment}
+        -i {repetitions} -F -e -k -v 1
+        -o {data_dir}/iorfs
+      transfer_block: "1M"
+      block_size: "1G"
+      segment: "4"
+      repetitions: 3
 
 # =============================================================================
 # SEARCH SPACE - boundaries handed to the LLM mutation prompt

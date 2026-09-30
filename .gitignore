@@ -19,3 +19,9 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Container builds & images
+images/
+logs/
+.apptainer_cache/
+.apptainer*

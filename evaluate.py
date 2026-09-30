@@ -49,6 +49,7 @@ from infrastructure import (
     IoConfig,
     LustreConfigurator,
     build_job_environment,
+    container_prefix,
     write_romio_hints,
     ROMIO_HINTS_FILE,
     ensure_inside,
@@ -75,25 +76,60 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     return cfg
 
 
-def resolve_engine(cfg: Mapping, candidate: Mapping) -> str:
-    """romio / ompio selection: candidate > config explicit > auto-probe."""
+def resolve_engine(cfg: Mapping, candidate: Mapping,
+                   container: str = "") -> str:
+    """romio / ompio selection: candidate > config explicit > probe > default.
+
+    When a container prefix is given, the probe runs INSIDE the plasma image:
+    its %environment sets OMPI_MCA_io=romio341, i.e. the embedded ROMIO is the
+    active MPI-IO component and hint files are the effective tuning surface
+    even though the MPI flavor is Open MPI.
+    """
     explicit = candidate.get("mpi_engine") or cfg["cluster"].get("mpi_engine", "auto")
     if explicit in ("romio", "ompio"):
         return explicit
 
-    # auto: probe the default mpiexec for the Open MPI banner.
-    exe = shutil.which("mpiexec") or shutil.which("mpirun")
-    if exe:
-        try:
-            out = subprocess.run([exe, "--version"], capture_output=True,
-                                 text=True, timeout=20).stdout.lower()
-            if "open mpi" in out or "ompio" in out:
-                return "ompio"
-            if "mpich" in out or "intel" in out or "cray" in out:
-                return "romio"
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    probe = _probe_mpi(container)
+    if probe:
+        return probe
     return str(cfg["cluster"].get("default_engine", "romio"))
+
+
+_MPI_PROBE_CACHE: dict = {}
+
+
+def _probe_mpi(container: str) -> Optional[str]:
+    """Detect the effective MPI-IO component; cached per probe target."""
+    key = container or "host"
+    if key in _MPI_PROBE_CACHE:
+        return _MPI_PROBE_CACHE[key]
+    result = None
+    try:
+        if container:
+            probe_cmd = (f"{container} sh -c "
+                         "'echo __IO=${OMPI_MCA_io:-unset}; "
+                         "mpirun --version 2>/dev/null | head -n 1'")
+            out = subprocess.run(probe_cmd, shell=True, capture_output=True,
+                                 text=True, timeout=300).stdout
+        else:
+            exe = shutil.which("mpiexec") or shutil.which("mpirun")
+            out = ""
+            if exe:
+                out = subprocess.run([exe, "--version"], capture_output=True,
+                                     text=True, timeout=20).stdout
+        low = out.lower()
+        if "__io=romio" in low:
+            result = "romio"          # e.g. OMPI_MCA_io=romio341 (embedded ROMIO)
+        elif "__io=omp" + "io" in low:
+            result = "omp" + "io"
+        elif "mpich" in low or "intel" in low or "cray" in low:
+            result = "romio"
+        elif "open mpi" in low:
+            result = "omp" + "io"     # OMPI default io component
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    _MPI_PROBE_CACHE[key] = result
+    return result
 
 
 def workspace_root(cfg: Mapping) -> Path:
@@ -160,10 +196,26 @@ def evaluate(candidate: Mapping[str, Any],
     result = None
     engine = "?"
     layout_desc = "(not applied)"
+    profile_name = "default"
 
     try:
         # -- 1. validate ------------------------------------------------------
-        engine = resolve_engine(cfg, cand)
+        # Decide dry-run ONCE: explicit flag or missing Slurm. The same
+        # decision governs the launcher, the container checks and probes.
+        simulate = bool(dry_run) or shutil.which("sbatch") is None
+
+        container = container_prefix(cfg, ws, REPO_ROOT)
+        probe_prefix = ""
+        if container and not simulate:
+            runtime = container.split()[0]
+            if shutil.which(runtime) is None:
+                raise RuntimeError(
+                    f"container runtime '{runtime}' not found; build the image "
+                    f"with container/build_container.sh or disable the "
+                    f"'container' block in config.yaml")
+            probe_prefix = container
+
+        engine = resolve_engine(cfg, cand, probe_prefix)
         io_cfg = IoConfig.from_candidate(cand, engine)
         io_cfg.stripe.validate(cfg["search_space"]["lustre"])
 
@@ -182,19 +234,24 @@ def evaluate(candidate: Mapping[str, Any],
         )
 
         # -- 4. compile + submit --------------------------------------------------
-        ntasks = int(bench_cfg.get("ntasks",
-                                   cfg["cluster"]["nodes"] * cfg["cluster"]["tasks_per_node"]))
-        command = str(bench_cfg["command"]).format(
+        prof_cmd, prof = _resolve_profile(cfg, cand)
+        profile_name = str(cand.get("benchmark_profile")
+                           or cfg.get("benchmark", {}).get("active", "default"))
+        ntasks = int(prof.get("ntasks")
+                     or cfg["cluster"]["nodes"] * cfg["cluster"]["tasks_per_node"])
+        full_cmd = (f"{container} " if container else "") + str(prof_cmd)
+        command = full_cmd.format(
             ntasks=ntasks,
             data_dir=data_dir,
-            transfer_block=bench_cfg.get("transfer_block", "1M"),
-            block_size=bench_cfg.get("block_size", "1G"),
-            segment=bench_cfg.get("segment", 1),
-            repetitions=bench_cfg.get("repetitions", 1),
+            repo=str(REPO_ROOT),
+            transfer_block=prof.get("transfer_block", "1M"),
+            block_size=prof.get("block_size", "1G"),
+            segment=prof.get("segment", 1),
+            repetitions=prof.get("repetitions", 1),
             engine=engine,
             hints_file=hints_file or "",
         )
-        launcher = SlurmLauncher(ws, dry_run=dry_run)
+        launcher = SlurmLauncher(ws, dry_run=simulate)
         script = launcher.build_script(
             run_dir,
             SlurmResources.from_config(cfg["cluster"], job_name=f"ev-{run_id}"),
@@ -246,6 +303,7 @@ def evaluate(candidate: Mapping[str, Any],
         "run_id": run_id,
         "run_dir": str(run_dir),
         "engine": engine,
+        "benchmark_profile": profile_name,
         "layout": layout_desc,
         "feedback": feedback,
     }
@@ -260,6 +318,34 @@ def evaluate(candidate: Mapping[str, Any],
     print(f"FITNESS: {score:.4f}")
     sys.stdout.flush()
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Benchmark profiles
+# ---------------------------------------------------------------------------
+
+
+def _resolve_profile(cfg: Mapping, candidate: Mapping) -> tuple:
+    """Pick the active benchmark profile (epoch_io | ior_canary | legacy).
+
+    A candidate may switch profiles with {"benchmark_profile": "ior_canary"}.
+    Profile keys overlay the shared benchmark: block keys (transfer_block...).
+    Returns (command_template, merged_profile_dict).
+    """
+    bench_cfg = dict(cfg.get("benchmark", {}) or {})
+    profiles = bench_cfg.pop("profiles", None)
+    if not profiles:                                   # legacy single command
+        return bench_cfg["command"], bench_cfg
+    name = candidate.get("benchmark_profile") or bench_cfg.get("active") \
+        or next(iter(profiles))
+    if name not in profiles:
+        raise ValueError(f"unknown benchmark_profile {name!r}; "
+                         f"choose from {sorted(profiles)}")
+    merged = {k: v for k, v in bench_cfg.items() if k != "active"}
+    merged.update(profiles[name] or {})
+    if "command" not in merged:
+        raise ValueError(f"benchmark profile {name!r} has no 'command'")
+    return merged["command"], merged
 
 
 # ---------------------------------------------------------------------------

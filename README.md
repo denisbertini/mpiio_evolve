@@ -63,11 +63,49 @@ filesystem under real contention.
 
 | Module | Responsibility |
 |---|---|
-| `config.yaml` | Search-space boundaries, Slurm resource request, benchmark command template, fitness shaping, workspace layout |
-| `infrastructure.py` | *Storage Hardware Modeler.* Applies `lfs setstripe -c {count} -S {size} {dir}`; writes ROMIO plaintext hint files; builds `OMPI_MCA_io_ompio_*` environment arrays; creates the synthetic `$HOME` cache tree; enforces `ensure_inside()` path isolation; whitelists known hints/keys |
+| `config.yaml` | Search-space boundaries, Slurm resource request, benchmark profiles, container declaration, fitness shaping, workspace layout |
+| `infrastructure.py` | *Storage Hardware Modeler.* Applies `lfs setstripe -c {count} -S {size} {dir}`; writes ROMIO plaintext hint files; builds `OMPI_MCA_io_ompio_*` environment arrays; builds the `apptainer exec` prefix; creates the synthetic `$HOME` cache tree; enforces `ensure_inside()` path jail; whitelists known hints/keys |
 | `slurm_launcher.py` | *Dynamic Script Compiler.* Renders a complete `#SBATCH` script per run with the cache-isolation export header, submits it with `sbatch --parsable --wait` (job exit code propagates), and simulates submission when Slurm is absent |
 | `parser.py` | *Log Aggregator & Error Profiler.* Extracts Max/Mean write/read speeds (IOR and generic simulator formats, all units → MiB/sec); classifies stderr into OOM / LUSTRE_LAYOUT / ENOSPC / MPI_LAUNCH / TIMEOUT / HOME_WRITE / … with quoted log evidence formatted as LLM feedback |
 | `evaluate.py` | *OpenEvolve entrypoint.* Validates the candidate, drives the full lifecycle, scores fitness, garbage-collects old runs, and speaks the `EVAL_METRICS {json}` + `FITNESS: <score>` stdout protocol |
+| `container/plasma_pp.def` | Apptainer definition: Rocky 9.5 + PMIx 5.0.6 + UCX 1.18 + Open MPI 5.0.7 (`--with-lustre --with-ucx --with-slurm`) + Lustre client 2.16 + HDF5 + ADIOS2 + openPMD + EPOCH 4.19.5 + WarpX 25.01 + IOR + OSU |
+| `container/build_container.sh` | Login-node image builder: isolates `HOME`/`TMPDIR`/`APPTAINER_CACHEDIR` into the workspace (no user home exists), supports root/`--fakeroot`/`--sudo`, publishes `images/current.sif`, validates the stack post-build |
+| `benchmarks/epoch_io/` | Real-application fitness: EPOCH1D checkpoint-stress deck + rank-aware runner that reports `aggregate write bandwidth: <x> GiB/s` |
+
+## Benchmark profiles
+
+The fitness source is a profile selected by `benchmark.active` (or per
+candidate via `{"benchmark_profile": "..."}`):
+
+| Profile | What it is | Fitness signal |
+|---|---|---|
+| `epoch_io` *(default)* | EPOCH1D laser–solid run with dense field+particle SDF dumps — real MPI-IO behavior of the production application | `total SDF bytes / wall time`, printed by the wrapper as `aggregate write bandwidth` |
+| `ior_canary` | IOR MPI-IO driver, independent files, `fsync` on write | IOR `Max/Mean Write/Read` lines — kept as the **Lustre health check**: if EPOCH scores tank but the canary is stable, the config is bad, not the filesystem |
+
+## Containerized execution
+
+Nothing runs bare: benchmark commands are automatically wrapped as
+
+```
+srun --mpi=pmix -n <ntasks> apptainer exec --home <ws>/.fake_home \
+     --contain --bind <ws>  images/current.sif  <benchmark command>
+```
+
+Build the image **on the login node** (the def needs ~40 GB of scratch, not
+`$HOME` — the script guarantees this):
+
+```bash
+./container/build_container.sh            # auto mode: root / --fakeroot / --sudo
+# → images/plasma_pp-<date>_<githash>.sif + symlink images/current.sif
+```
+
+**MPI-IO component subtlety (Virgo2 image):** `%environment` sets
+`OMPI_MCA_io=romio341`, so although the MPI flavor is Open MPI 5.0.7, the
+active MPI-IO component is the **embedded ROMIO** — ROMIO hint files
+(`MPIIO_HINTS`) are the primary tuning surface. `evaluate.py` probes the
+image once per session to detect this; a candidate that selects
+`"mpi_engine": "ompio"` additionally exports `OMPI_MCA_io=ompio` so the
+`OMPI_MCA_io_ompio_*` aggregator variables actually take effect.
 
 ## Candidate schema
 
@@ -143,7 +181,8 @@ pip install -r requirements.txt          # PyYAML; everything else is stdlib
 python3 evaluate.py --candidate examples/candidate_romio.json --dry-run
 python3 evaluate.py --candidate examples/candidate_ompio.json --dry-run
 
-# On the cluster (module load your MPI + IOR; set account in config.yaml):
+# On the cluster: build the image once (login node), then:
+./container/build_container.sh
 python3 evaluate.py --candidate examples/candidate_romio.json
 python3 evaluate.py --candidate - --dry-run < my_mutant.json   # JSON via stdin
 ```
@@ -182,25 +221,34 @@ Suggested mutation-prompt preamble:
 
 ```
 mpiio_evolve/
-├── config.yaml                 # search space + cluster declaration (edit me)
-├── infrastructure.py           # Lustre / ROMIO / OMPIO translation blocks
+├── config.yaml                 # search space + cluster + container + profiles
+├── infrastructure.py           # Lustre / ROMIO / OMPIO / container translation
 ├── slurm_launcher.py           # sbatch script compiler + --wait submit
 ├── parser.py                   # throughput regexes + error profiler
 ├── evaluate.py                 # OpenEvolve entrypoint (FITNESS: protocol)
+├── container/
+│   ├── plasma_pp.def           # full plasma HPC stack (Virgo2 production image)
+│   └── build_container.sh      # login-node builder ($HOME-free)
+├── benchmarks/
+│   └── epoch_io/               # EPOCH1D checkpoint-stress fitness benchmark
 ├── examples/
-│   ├── candidate_romio.json    # MPICH/Intel/Cray starting candidate
-│   └── candidate_ompio.json    # Open MPI starting candidate
+│   ├── candidate_romio.json    # ROMIO-engine starting candidate (romio341 too)
+│   └── candidate_ompio.json    # Open MPI io_ompio starting candidate
+├── images/                     # .sif images + current.sif symlink (gitignored)
 ├── runs/                       # per-run artifacts (gitignored)
 └── .fake_home/                 # synthetic $HOME cache tree (gitignored)
 ```
 
 ## Roadmap
 
+- [x] Containerized execution (plasma image + login-node builder)
+- [x] Real-application fitness: EPOCH checkpoint benchmark profile
+- [ ] Production deck calibration: mirror the real sim's dump cadence/volume
 - [ ] `prompts/` templates encoding Lustre domain priors for the mutator
 - [ ] Native OpenEvolve evaluator config wired to the subprocess protocol
 - [ ] Multi-client sweep (vary `tasks_per_node` as an evolved dimension)
 - [ ] `lfs df`/MDC-contention telemetry folded into the fitness signal
-- [ ] Read-phase-only and weak/strong-read benchmark modes for the physics sim
+- [ ] ADIOS2/openPMD backend profile (beyond raw MPI-IO)
 
 ## Requirements
 
