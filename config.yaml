@@ -42,7 +42,8 @@ cluster:
   tasks_per_node: 32
   cpus_per_task: 1
   mem_per_cpu: "4000M"
-  time_limit: "10:00:00"               # covers all in-job reps with headroom
+  time_limit: "00:45:00"               # measured: ~4 min/run @ t_end=50fs;
+                                       # 3 in-job reps + startup + headroom
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation, matching Denis's
