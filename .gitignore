@@ -34,3 +34,4 @@ container/
 # Controller venv (lives on the parallel filesystem)
 .controller_env/
 .uv_cache/
+timing_probe.generated.json
