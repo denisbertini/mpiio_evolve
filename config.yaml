@@ -101,6 +101,11 @@ benchmark:
       # which parser.py scores. Tune the deck's dt_snapshot cadence to
       # mirror your production checkpoint cadence.
       command: "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
+      # Pre-step run by the batch script ONCE per repetition BEFORE srun
+      # (single writer): creates <data_dir>/rep<k>/ and symlinks the LWFA
+      # deck to EPOCH's default name input.deck inside it. Ranks only cd
+      # there and answer the "Specify output directory" prompt with '.'.
+      setup_script: "bash {repo}/benchmarks/epoch_io/setup_run.sh {data_dir}"
       # Post-step run by the batch script once per repetition AFTER srun
       # returned (srun = barrier -> all ranks closed their files; no per-rank
       # coordination anywhere). Sums *.sdf bytes / wall time, layout-agnostic

@@ -372,19 +372,17 @@ def evaluate(candidate: Mapping[str, Any],
             engine=engine,
             hints_file=hints_file or "",
         )
-        # Optional post-step measurement (runs after srun, host shell;
-        # the launcher brackets it with $t0/$t1 nanosecond timestamps).
-        measure = str(prof.get("measure_script", "") or "").format(
-            ntasks=ntasks,
-            data_dir=data_dir,
-            repo=str(REPO_ROOT),
-            transfer_block=prof.get("transfer_block", "1M"),
-            block_size=prof.get("block_size", "1G"),
-            segment=prof.get("segment", 1),
-            repetitions=prof.get("repetitions", 1),
-            engine=engine,
-            hints_file=hints_file or "",
-        )
+        # Optional pre-step (batch shell, BEFORE srun: run-dir prep such as
+        # the input.deck symlink) and post-step (AFTER srun; the launcher
+        # brackets it with $t0/$t1 nanosecond timestamps).
+        _fmt = dict(ntasks=ntasks, data_dir=data_dir, repo=str(REPO_ROOT),
+                    transfer_block=prof.get("transfer_block", "1M"),
+                    block_size=prof.get("block_size", "1G"),
+                    segment=prof.get("segment", 1),
+                    repetitions=prof.get("repetitions", 1),
+                    engine=engine, hints_file=hints_file or "")
+        setup = str(prof.get("setup_script", "") or "").format(**_fmt)
+        measure = str(prof.get("measure_script", "") or "").format(**_fmt)
         launcher = SlurmLauncher(ws, dry_run=simulate)
         extra_srun = str(cfg["cluster"].get("extra_srun_args", "") or "")
         job_timeout = _time_limit_seconds(cfg["cluster"]) + 120
@@ -405,7 +403,8 @@ def evaluate(candidate: Mapping[str, Any],
                 rdir = run_dir / f"rep{k}"
                 script_k = launcher.build_script(
                     rdir, resources, command, env,
-                    extra_srun_args=extra_srun, measure_script=measure)
+                    extra_srun_args=extra_srun, measure_script=measure,
+                    setup_script=setup)
                 res_k = launcher.submit(script_k, wait=wait, timeout=job_timeout)
                 if res_k.simulated:
                     (rdir / "stdout.log").write_text(
@@ -422,7 +421,7 @@ def evaluate(candidate: Mapping[str, Any],
             script = launcher.build_script(
                 run_dir, resources, command, env,
                 extra_srun_args=extra_srun, repetitions=reps,
-                measure_script=measure)
+                measure_script=measure, setup_script=setup)
             result = launcher.submit(script, wait=wait, timeout=job_timeout)
             if result.simulated:
                 (run_dir / "stdout.log").write_text(

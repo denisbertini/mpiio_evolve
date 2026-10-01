@@ -150,6 +150,7 @@ class SlurmLauncher:
         extra_srun_args: str = "",
         repetitions: int = 1,
         measure_script: str = "",
+        setup_script: str = "",
     ) -> Path:
         """Render the complete sbatch script into *run_dir* and return its path.
 
@@ -187,7 +188,7 @@ class SlurmLauncher:
             'OMPI_MCA_io_ompio_num_aggregators=${OMPI_MCA_io_ompio_num_aggregators:-<unset>}"',
             "",
             self._benchmark_block(command, extra_srun_args, repetitions,
-                                  measure_script),
+                                  measure_script, setup_script),
             "",
         ]
 
@@ -200,35 +201,37 @@ class SlurmLauncher:
     @staticmethod
     def _benchmark_block(command: str,
                          extra_srun_args: str, repetitions: int,
-                         measure_script: str = "") -> str:
+                         measure_script: str = "",
+                         setup_script: str = "") -> str:
         # Bare srun: --nodes/--ntasks-per-node in the #SBATCH header define
         # the allocation, and every srun step inherits it in full.
         srun = f"srun {extra_srun_args} {command}".replace("  ", " ")
-        # Optional post-step: a profile may provide a *measure_script* that
-        # runs ONCE per repetition on the host shell AFTER srun returned
-        # (srun is the barrier -- all ranks done, zero coordination).
-        # t0/t1 bracket the srun call; the script receives them as $2/$3.
+        # Optional PRE-step: runs ONCE per repetition by the batch shell
+        # BEFORE srun (single writer -> run-dir prep and deck symlinking
+        # happen outside the MPI step; the rank shim stays pure 'cd + exec').
+        # Optional POST-step: measure_script runs AFTER srun returned
+        # (srun = barrier, all files closed), bracketed by t0/t1 ns stamps.
+        pre_ = (setup_script + "\n") if setup_script else ""
         if repetitions <= 1:
-            if not measure_script:
-                return f"{srun}\nexit $?"
-            return (
-                "t0=$(date +%s%N)\n"
-                f"{srun}\n"
-                "rc=$?\n"
-                "t1=$(date +%s%N)\n"
-                f"{measure_script} \"$t0\" \"$t1\" || true\n"
-                "exit $rc"
-            )
+            body = "t0=$(date +%s%N)\n" if measure_script else ""
+            tail = ("rc=$?\n"
+                    "t1=$(date +%s%N)\n"
+                    f"{measure_script} \"$t0\" \"$t1\" || true\n"
+                    "exit $rc") if measure_script else "exit $?"
+            return f"{pre_}{body}{srun}\n{tail}"
         lines = [
             "worst_rc=0",
             f"for rep in $(seq 1 {repetitions}); do",
             '  echo "=== MPIIO_EVOLVE_REP ${rep} ==="',
-            "  t0=$(date +%s%N)",
-            f"  MPIIO_EVOLVE_REP=${{rep}} {srun}",
-            "  rc=$?",
-            "  t1=$(date +%s%N)",
         ]
+        if setup_script:
+            lines.append(f"  MPIIO_EVOLVE_REP=${{rep}} {setup_script}")
         if measure_script:
+            lines.append("  t0=$(date +%s%N)")
+        lines.append(f"  MPIIO_EVOLVE_REP=${{rep}} {srun}")
+        lines.append("  rc=$?")
+        if measure_script:
+            lines.append("  t1=$(date +%s%N)")
             lines.append(f'  MPIIO_EVOLVE_REP=${{rep}} {measure_script} "$t0" '
                          '"$t1" || true')
         lines += [
