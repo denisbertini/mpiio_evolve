@@ -9,7 +9,7 @@
     "lustre_strict": true
   },
   "cluster": {
-    "partition": "nvidia_gpu",
+    "partition": "main",
     "account": "rz",
     "qos": null,
     "nodes": 1,
@@ -17,7 +17,7 @@
     "cpus_per_task": 1,
     "mem_per_cpu": "4000M",
     "time_limit": "00:45:00",
-    "constraint": null,
+    "constraint": "9654",
     "extra_sbatch": [],
     "extra_srun_args": "--mpi=pmix --export=ALL",
     "wait": true,

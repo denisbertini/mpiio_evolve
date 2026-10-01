@@ -35,7 +35,9 @@ workspace:
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------
-  partition: "nvidia_gpu"
+  # Virgo4 CPU cluster: the benchmark is pure CPU+MPI+Lustre -- no reason to
+  # squat on GPU nodes. (The GPU cluster hosts only the LLM endpoint.)
+  partition: "main"
   account: "rz"          # TODO: your Slurm account/allocation
   qos: null                            # optional QoS
   nodes: 1
@@ -44,7 +46,10 @@ cluster:
   mem_per_cpu: "4000M"
   time_limit: "00:45:00"               # measured: ~4 min/run @ t_end=50fs;
                                        # 3 in-job reps + startup + headroom
-  constraint: null                     # e.g. "lustre" node feature tag
+  # Pin one CPU generation for measurement homogeneity: 'main' is mixed
+  # EPYC 9654 (384c) / 9555 / 7713 (256c) -- letting candidates land on
+  # different CPU types would bias fitness exactly like a bad hint.
+  constraint: "9654"
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation, matching Denis's
   # validated run_file.sh: --mpi=pmix bootstraps MPI via PMIx (srun IS the

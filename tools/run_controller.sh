@@ -4,7 +4,7 @@
 #
 # Runs the controller from the Lustre-based venv (.controller_env). It spawns
 # evaluate.py per candidate, so this process needs the full login-node trio:
-# sbatch client, lfs, and network access to the vLLM/Ollama reverse tunnel.
+# sbatch client, lfs, and network access to the LLM proxy on the GPU cluster.
 #
 # Usage:
 #   tmux new -s evolve
@@ -27,9 +27,12 @@ export HOME="$REPO_ROOT/.fake_home"
 export TMPDIR="$REPO_ROOT/tmp"
 export XDG_CACHE_HOME="$REPO_ROOT/.cache"
 
-# LLM endpoint = the login-node reverse tunnel to the GPU cluster.
-# Adjust host/port to your tunnel setup.
-export OPENAI_API_BASE="${OPENAI_API_BASE:-http://127.0.0.1:8000/v1}"
+# LLM endpoint: GPU-cluster llama.cpp behind the uvicorn proxy on the GPU
+# login node. NO_PROXY is MANDATORY on ccsub*: without it the corporate
+# Squid proxy silently swallows the requests (error page instead of JSON).
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}ccdev0022.hpc.gsi.de,localhost,127.0.0.1"
+export no_proxy="$NO_PROXY"
+export OPENAI_API_BASE="${OPENAI_API_BASE:-http://ccdev0022.hpc.gsi.de:8781/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-unused}"
 
 # One state directory per launcher/user under the deployment root.
@@ -39,4 +42,4 @@ echo "mpiio_evolve controller: state=$MPIIO_EVOLVE_STATE_DIR  llm=$OPENAI_API_BA
 echo "config: $CFG"
 
 cd "$REPO_ROOT"
-exec nice -n 5 "$ENV_DIR/bin/openevolve" "$CFG"
+exec nice -n 5 "$ENV_DIR/bin/python" "$REPO_ROOT/tools/launch_evolution.py" "$CFG"

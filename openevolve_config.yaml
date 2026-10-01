@@ -1,0 +1,80 @@
+# =============================================================================
+# openevolve_config.yaml -- evolutionary tuning of MPI-IO for EPOCH/Lustre
+#
+# Topology (GSI Virgo4 CPU cluster + Virgo2 GPU cluster for inference):
+#   controller   : ccsub0001 login, tmux, Lustre venv (.controller_env)
+#   evaluations  : Slurm 'main' partition (EPYC 9654, constraint-pinned for
+#                  measurement homogeneity) via evaluate.py -> sbatch
+#   LLM          : GPU-cluster llama.cpp behind the uvicorn proxy:
+#                  http://ccdev0022.hpc.gsi.de:8781/v1   (NO_PROXY required!
+#                  the Squid proxy on ccsub* eats un-bypassed HTTP)
+#
+# Launch:  ./tools/run_controller.sh openevolve_config.yaml
+# =============================================================================
+
+max_iterations: 40              # ~18 min/eval serial -> ~12 h overnight campaign
+checkpoint_interval: 5
+log_level: "INFO"
+random_seed: 42
+
+language: "json"                # the evolved "program" is a candidate config
+file_suffix: ".json"            # temp candidate files parse as JSON downstream
+diff_based_evolution: false     # small files: full regeneration is far more robust
+max_code_length: 4000
+
+llm:
+  models:
+    - name: "/tmp/Qwen_Qwen3.8-Flash-Next_UD-Q4_K_XL-00001-of-00004.gguf"
+      weight: 1.0
+  api_base: "http://ccdev0022.hpc.gsi.de:8781/v1"
+  api_key: "unused"             # proxy ignores it; the client requires one
+  temperature: 0.6              # creative but the JSON must stay valid
+  top_p: 0.95
+  max_tokens: 2048              # reasoning model: reasoning burst + candidate
+  timeout: 300
+  retries: 3
+  retry_delay: 10
+
+evaluator:
+  timeout: 3300                 # 3 in-job reps (~15-18 min) + queue + margin
+  max_retries: 1                # a failed eval scores 0; don't burn allocations
+  cascade_evaluation: false     # every candidate gets the honest 3-rep measurement
+  parallel_evaluations: 1       # serial first; raise to 2-3 once Lustre noise is known
+  enable_artifacts: true
+
+database:
+  in_memory: true
+  population_size: 30
+  num_islands: 2
+  archive_size: 10
+
+prompt:
+  num_top_programs: 3
+  num_diverse_programs: 2
+  system_message: |
+    You are an expert in HPC I/O performance. You evolve MPI-IO configuration
+    candidates (JSON) for the EPOCH particle-in-cell code writing SDF
+    checkpoint dumps to Lustre on the GSI Virgo cluster (Open MPI 5.0.11,
+    embedded ROMIO 3.4.1 via OMPI_MCA_io=romio341).
+
+    A candidate JSON may contain: lustre.striping_count/stripe_size (lfs
+    setstripe applied to the dump directory before the run), romio hints
+    (romio_cb_write/romio_cb_read: collective buffering; cb_nodes: number of
+    aggregator ranks; cb_buffer_size; romio_ds_read/romio_ds_write:
+    data-sieving; no_io_anchors), an ompio section (used only when
+    engine=ompio), engine ("romio" or "ompio"), and an optional
+    benchmark_profile. Only values listed in the provided search space are
+    legal. Switching engine to "ompio" replaces the whole tuning surface
+    with OMPI_MCA_io_ompio_* variables.
+
+    Fitness = aggregate SDF write bandwidth (GiB/s), measured as the MEAN of
+    3 repetitions inside one allocation; SEM error bars appear in the
+    feedback. Lustre is shared: differences smaller than the SEM are noise,
+    do not chase them. Physical intuition that transfers: too many
+    aggregators (cb_nodes) add RPC overhead, too few bottleneck the big
+    collective stream; stripe_count should match what a single large
+    collective file can spread across; collective buffering pairs well with
+    stripe_size >= the per-aggregator chunk (cb_buffer_size); data-sieving
+    hurts when per-rank strided extents are large and contiguous.
+
+    Output ONLY the complete candidate JSON. No prose, no markdown fences.
