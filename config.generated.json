@@ -1,7 +1,7 @@
 {
   "workspace": {
     "root": "/lustre/rz/dbertini2",
-    "state_dir": "default",
+    "state_dir": "ppio_tune",
     "runs_subdir": "runs",
     "home_subdir": ".fake_home",
     "keep_data": false,
@@ -9,14 +9,14 @@
     "lustre_strict": true
   },
   "cluster": {
-    "partition": "compute",
-    "account": "io_optimization",
+    "partition": "nvidia_gpu",
+    "account": "rz",
     "qos": null,
     "nodes": 1,
     "tasks_per_node": 32,
     "cpus_per_task": 1,
     "mem_per_cpu": "4000M",
-    "time_limit": "00:10:00",
+    "time_limit": "01:00:00",
     "constraint": null,
     "extra_sbatch": [],
     "extra_srun_args": "--mpi=pmix",
@@ -28,7 +28,7 @@
     "enabled": true,
     "runtime": "apptainer",
     "image": "images/current.sif",
-    "exec_opts": "--contain --bind {workspace}",
+    "exec_opts": "--contain",
     "mpi_mode": "srun_direct"
   },
   "benchmark": {

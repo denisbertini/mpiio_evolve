@@ -282,11 +282,17 @@ def write_romio_hints(path: Path, hints: Mapping[str, str]) -> Optional[Path]:
 
 
 def romio_environment(hints_file: Optional[Path]) -> dict:
-    """Environment fragment that activates a ROMIO hint file."""
-    env = {"MPIIO_HINTS": str(hints_file)} if hints_file else {}
-    # Make ROMIO verbose so parser.py can surface hint-level diagnostics.
-    env.setdefault("MPICH_IO_DEBUG_LEVEL", "0")
-    return env
+    """Environment fragment that activates a ROMIO hint file.
+
+    Works for MPICH-family MPIs AND for Open MPI >= 4 built with the
+    embedded ROMIO (our Virgo2 image: Open MPI 5.0.11,
+    OMPI_MCA_io=romio341): the ADIO layer is the same ROMIO code and reads
+    the same MPIIO_HINTS file + hint keys. NOTE: there is deliberately NO
+    MPICH_* debug export here -- MPICH does not run on this stack. ROMIO's
+    own debug channel is MPIIO_DEBUG=<category,...>, but it only produces
+    output on specially-built ROMIO; enable it manually when diagnosing.
+    """
+    return {"MPIIO_HINTS": str(hints_file)} if hints_file else {}
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +376,30 @@ def isolated_home(workspace_root: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Apptainer job environment  (site-validated on Virgo2)
+# ---------------------------------------------------------------------------
+
+
+def apptainer_job_env(deploy_root: Path) -> dict:
+    """APPTAINER_* variables every job needs (validated by Denis on Virgo2).
+
+    BINDPATH must cover the WHOLE deploy root, not just the state dir:
+    profile commands reference the repo itself (e.g.
+    benchmarks/epoch_io/run_bench.sh) and everything lives under
+    /lustre/rz/dbertini2. CONFIGDIR is node-local /tmp (fast; avoids
+    first-run config writes on Lustre) -- the script body mkdir -p's it
+    because /tmp is per-compute-node. SHARENS keeps the network namespace
+    shared, as validated for the plasma production runs.
+    """
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "mpiio"
+    return {
+        "APPTAINER_BINDPATH": str(deploy_root),
+        "APPTAINER_CONFIGDIR": f"/tmp/{user}",
+        "APPTAINER_SHARENS": "true",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Full job-environment assembly
 # ---------------------------------------------------------------------------
 
@@ -387,6 +417,7 @@ def build_job_environment(
     candidate extra_env (allowlisted).
     """
     env = isolated_home(Path(workspace_root) / home_subdir)
+    env.update(apptainer_job_env(Path(workspace_root).resolve().parent))
 
     if config.engine == "romio":
         env.update(romio_environment(hints_file))
