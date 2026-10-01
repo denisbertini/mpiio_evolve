@@ -1,0 +1,39 @@
+# ============================================================================
+# LLM endpoint reachability tests  (run on the CPU-cluster login, ccsub0001)
+#
+# The endpoint: OpenAI/Ollama-style uvicorn proxy on the GPU-cluster login
+# node, in front of llama.cpp serving the Qwen3.8 GGUF.
+#
+# IMPORTANT: --noproxy '*' (or NO_PROXY) is mandatory on ccsub0001, otherwise
+# the corporate Squid proxy intercepts the call and returns an error page
+# instead of the endpoint's answer. The same applies to the OpenEvolve
+# controller:  export NO_PROXY="ccdev0022.hpc.gsi.de,localhost,127.0.0.1"
+# ============================================================================
+
+# 1. Model listing (confirms the proxy is up + exact model id string):
+curl -s --noproxy '*' http://ccdev0022.hpc.gsi.de:8781/v1/models | head -c 400
+
+# 2. Chat completion (the route OpenEvolve actually uses -- the decisive test):
+curl -s --noproxy '*' http://ccdev0022.hpc.gsi.de:8781/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"/tmp/Qwen_Qwen3.8-Flash-Next_UD-Q4_K_XL-00001-of-00004.gguf",
+       "messages":[{"role":"user","content":"Reply with exactly: PONG"}],
+       "max_tokens":16}' | head -c 400
+
+# 3. Latency sanity (time-to-first-generation for a small prompt):
+time curl -s --noproxy '*' http://ccdev0022.hpc.gsi.de:8781/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"/tmp/Qwen_Qwen3.8-Flash-Next_UD-Q4_K_XL-00001-of-00004.gguf",
+       "messages":[{"role":"user","content":"Say OK"}],
+       "max_tokens":4}' > /dev/null
+
+# Expected answers:
+#   1 -> {"models":[...],"data":[{"id":"/tmp/Qwen_...gguf",...}]}
+#   2 -> {"id":"chatcmpl-...","choices":[{"message":{"content":"PONG"...
+#   3 -> a few seconds (mutation-time scale for longer prompts)
+#
+# Failure signatures:
+#   Squid HTML error page        -> proxy not bypassed (add --noproxy '*')
+#   Connection refused on 8781   -> proxy down on ccdev0022 (restart scheduler)
+#   404 on /v1/chat/completions  -> proxy is completion-only; OpenEvolve would
+#                                   need the /v1/completions route instead
