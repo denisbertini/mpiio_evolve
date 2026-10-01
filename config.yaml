@@ -80,9 +80,10 @@ container:
   mpi_mode: "srun_direct"
 
 benchmark:
-  # Active profile -> REAL-APPLICATION fitness (EPOCH checkpoints).
-  # Switch to "ior_canary" for Lustre health checks / debugging, or let a
-  # candidate override with {"benchmark_profile": "ior_canary"}.
+  # Active profile -> REAL-APPLICATION fitness (EPOCH 3D LWFA checkpoints).
+  # A candidate may override with {"benchmark_profile": "<name>"}.
+  # (The former "ior_canary" probe is retired from the test suite -- IOR is
+  # still installed in the image for manual Lustre health checks.)
   active: "epoch_io"
   # ntasks defaults to cluster.nodes * cluster.tasks_per_node. When set, it
   # is folded into the #SBATCH --ntasks-per-node header (must be divisible by
@@ -91,25 +92,14 @@ benchmark:
 
   profiles:
     epoch_io:
-      # Checkpoint-stress EPOCH1D run. The rank-aware wrapper measures total
-      # SDF diagnostic volume / wall time and prints the generic line
+      # Checkpoint-stress EPOCH 3D LWFA run (benchmarks/epoch_io/
+      # epoch3d_lwfa.deck): moving-window LWFA, tracer dumps every 1 fs +
+      # field/particle dumps every 5 fs. The rank-aware wrapper measures
+      # total SDF diagnostic volume / wall time and prints the generic line
       #   "aggregate write bandwidth: <x> GiB/s"
-      # which parser.py scores. Tune benchmarks/epoch_io/epoch1d_io.input to
+      # which parser.py scores. Tune the deck's dt_snapshot cadence to
       # mirror your production checkpoint cadence.
       command: "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
-
-    ior_canary:
-      # Classic Lustre sanity probe: independent files, fsync on write.
-      # Placeholders: {transfer_block} {block_size} {segment} {repetitions}
-      command: >-
-        IOR -a MPIIO
-        -t {transfer_block} -b {block_size} -s {segment}
-        -i {repetitions} -F -e -k -v 1
-        -o {data_dir}/iorfs
-      transfer_block: "1M"
-      block_size: "1G"
-      segment: "4"
-      repetitions: 3
 
 # =============================================================================
 # SEARCH SPACE - boundaries handed to the LLM mutation prompt

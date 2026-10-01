@@ -70,7 +70,7 @@ filesystem under real contention.
 | `evaluate.py` | *OpenEvolve entrypoint.* Validates the candidate, drives the full lifecycle, scores fitness, garbage-collects old runs, and speaks the `EVAL_METRICS {json}` + `FITNESS: <score>` stdout protocol |
 | `container/plasma_pp.def` | Apptainer definition: Rocky 9.5 + PMIx 5.0.6 + UCX 1.18 + Open MPI 5.0.7 (`--with-lustre --with-ucx --with-slurm`) + Lustre client 2.16 + HDF5 + ADIOS2 + openPMD + EPOCH 4.19.5 + WarpX 25.01 + IOR + OSU |
 | `container/build_container.sh` | Login-node image builder: isolates `HOME`/`TMPDIR`/`APPTAINER_CACHEDIR` into the workspace (no user home exists), supports root/`--fakeroot`/`--sudo`, publishes `images/current.sif`, validates the stack post-build |
-| `benchmarks/epoch_io/` | Real-application fitness: EPOCH1D checkpoint-stress deck + rank-aware runner that reports `aggregate write bandwidth: <x> GiB/s` |
+| `benchmarks/epoch_io/` | Real-application fitness: EPOCH 3D LWFA checkpoint-stress deck + rank-aware runner that reports `aggregate write bandwidth: <x> GiB/s` |
 
 ## Benchmark profiles
 
@@ -79,8 +79,10 @@ candidate via `{"benchmark_profile": "..."}`):
 
 | Profile | What it is | Fitness signal |
 |---|---|---|
-| `epoch_io` *(default)* | EPOCH1D laser–solid run with dense field+particle SDF dumps — real MPI-IO behavior of the production application | `total SDF bytes / wall time`, printed by the wrapper as `aggregate write bandwidth` |
-| `ior_canary` | IOR MPI-IO driver, independent files, `fsync` on write | IOR `Max/Mean Write/Read` lines — kept as the **Lustre health check**: if EPOCH scores tank but the canary is stable, the config is bad, not the filesystem |
+| `epoch_io` *(default)* | EPOCH 3D LWFA run (moving window, tracer dumps every 1 fs + field/particle dumps every 5 fs) — real checkpoint I/O of the production application, as used by our LWFA users | `total SDF bytes / wall time`, printed by the wrapper as `aggregate write bandwidth` |
+
+*(The `ior_canary` Lustre-health probe is retired from the test suite; IOR
+remains installed in the image for manual spot checks.)*
 
 ## Containerized execution
 
@@ -323,7 +325,7 @@ mpiio_evolve/
 │   ├── plasma_pp.def           # full plasma HPC stack (Virgo2 production image)
 │   └── build_container.sh      # login-node builder ($HOME-free)
 ├── benchmarks/
-│   └── epoch_io/               # EPOCH1D checkpoint-stress fitness benchmark
+│   └── epoch_io/               # EPOCH 3D LWFA checkpoint-stress fitness benchmark
 ├── examples/
 │   ├── candidate_romio.json    # ROMIO-engine starting candidate (romio341 too)
 │   └── candidate_ompio.json    # Open MPI io_ompio starting candidate

@@ -36,13 +36,6 @@
     "profiles": {
       "epoch_io": {
         "command": "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
-      },
-      "ior_canary": {
-        "command": "IOR -a MPIIO -t {transfer_block} -b {block_size} -s {segment} -i {repetitions} -F -e -k -v 1 -o {data_dir}/iorfs",
-        "transfer_block": "1M",
-        "block_size": "1G",
-        "segment": "4",
-        "repetitions": 3
       }
     }
   },

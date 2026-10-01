@@ -113,7 +113,7 @@ echo "Symlink  : images/current.sif -> $(basename "$SIF")"
 echo "-- validating image --"
 "$RUNTIME" exec --home "$HOME" --bind "$REPO_ROOT" "$SIF" bash -lc '
     rc=0
-    for b in mpirun mpiexec srun ior epoch1d epoch1d_lstr warpx_1d python3 h5pcc adios2-config; do
+    for b in mpirun mpiexec srun ior epoch1d epoch1d_lstr epoch2d epoch3d epoch3d_lstr warpx_1d python3 h5pcc adios2-config; do
         if command -v "$b" >/dev/null 2>&1; then echo "  [ok]      $b"; else echo "  [MISSING] $b"; rc=1; fi
     done
     echo "  $(mpirun --version 2>/dev/null | head -n1)"

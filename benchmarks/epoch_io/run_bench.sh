@@ -1,24 +1,29 @@
 #!/bin/bash
 # =============================================================================
-# mpiio_evolve -- EPOCH1D MPI-IO benchmark runner
+# mpiio_evolve -- EPOCH 3D LWFA MPI-IO benchmark runner
 #
 # Runs INSIDE the apptainer image, launched by srun: ONE wrapper per rank
-# (srun_direct mode). All ranks execute epoch1d; rank 0 then aggregates the
+# (srun_direct mode). All ranks execute epoch3d; rank 0 then aggregates the
 # total SDF diagnostic volume and elapsed wall time and prints the
 # generic-parsable fitness line:
 #
 #     aggregate write bandwidth: <X> GiB/s
 #
+# The deck (benchmarks/epoch_io/epoch3d_lwfa.deck) is a light 3D LWFA run
+# with two dump streams -- tracer particles every 1 fs and fields+particles
+# every 5 fs -- i.e. the checkpoint pressure pattern our users generate.
+#
 # Env (all optional):
-#   EPOCH_BIN   epoch binary               (default: epoch1d_lstr)
-#   EPOCH_DECK  deck file in this folder   (default: epoch1d_io.input)
+#   EPOCH_BIN   epoch binary               (default: epoch3d_lstr)
+#   EPOCH_DECK  deck file in this folder   (default: epoch3d_lwfa.deck)
 # =============================================================================
 set -uo pipefail
 
 DATA_DIR="${1:?usage: run_bench.sh <data_dir>}"
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DECK="${EPOCH_DECK:-epoch1d_io.input}"
-EPOCH_BIN="${EPOCH_BIN:-epoch1d_lstr}"
+DECK="${EPOCH_DECK:-epoch3d_lwfa.deck}"
+# _lstr variant: same build with string_length=100000 for long Lustre paths
+EPOCH_BIN="${EPOCH_BIN:-epoch3d_lstr}"
 RANK="${SLURM_PROCID:-0}"
 NTASKS="${SLURM_NTASKS:-1}"
 

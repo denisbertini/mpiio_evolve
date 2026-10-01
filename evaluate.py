@@ -506,9 +506,9 @@ def evaluate(candidate: Mapping[str, Any],
 
 
 def _resolve_profile(cfg: Mapping, candidate: Mapping) -> tuple:
-    """Pick the active benchmark profile (epoch_io | ior_canary | legacy).
+    """Pick the active benchmark profile (epoch_io | legacy).
 
-    A candidate may switch profiles with {"benchmark_profile": "ior_canary"}.
+    A candidate may switch profiles with {"benchmark_profile": "<name>"}.
     Profile keys overlay the shared benchmark: block keys (transfer_block...).
     Returns (command_template, merged_profile_dict).
     """
