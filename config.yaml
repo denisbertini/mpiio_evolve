@@ -42,7 +42,7 @@ cluster:
   tasks_per_node: 32
   cpus_per_task: 1
   mem_per_cpu: "4000M"
-  time_limit: "01:00:00"
+  time_limit: "10:00:00"               # covers all in-job reps with headroom
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation. --mpi=pmix matches the
