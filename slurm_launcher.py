@@ -180,8 +180,8 @@ class SlurmLauncher:
             render_env_exports(env),
             "",
             "set -u",
-            # /tmp is per-node: apptainer needs its config dir to exist
-            'mkdir -p "$APPTAINER_CONFIGDIR" 2>/dev/null || true',
+            # /tmp is per-node: apptainer needs its config/tmp dirs to exist
+            'mkdir -p "$APPTAINER_CONFIGDIR" "$APPTAINER_TMPDIR" 2>/dev/null || true',
             'echo "mpiio_evolve: job started on $(hostname) at $(date -Is)"',
             'echo "mpiio_evolve: MPIIO_HINTS=${MPIIO_HINTS:-<unset>} '
             'OMPI_MCA_io_ompio_num_aggregators=${OMPI_MCA_io_ompio_num_aggregators:-<unset>}"',

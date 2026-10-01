@@ -336,12 +336,17 @@ def ompio_environment(mca_settings: Mapping[str, str]) -> dict:
 # ---------------------------------------------------------------------------
 
 #: Every cache/config/temp variable a Python/HPC stack is known to write to.
+#: NOTE: XDG_RUNTIME_DIR is deliberately NOT exported. Setting it (to a
+#: directory that exists!) makes rootless apptainer believe a systemd user
+#: session is present; the --sharens instance path then tries the dbus
+#: cgroup manager and FATALs ('failed to connect to bus') on compute nodes.
+#: The production environment leaves it unset -- apptainer takes its
+#: no-systemd fallback -- so we match exactly.
 _ISOLATED_VARS = [
     ("HOME", ""),                       # synthetic home root itself
     ("XDG_CACHE_HOME", ".cache"),
     ("XDG_CONFIG_HOME", ".config"),
     ("XDG_DATA_HOME", ".local/share"),
-    ("XDG_RUNTIME_DIR", ".runtime"),
     ("HF_HOME", ".hf_cache"),
     ("HF_DATASETS_CACHE", ".hf_cache/datasets"),
     ("TRANSFORMERS_CACHE", ".hf_cache/transformers"),
@@ -353,11 +358,11 @@ _ISOLATED_VARS = [
     ("TMPDIR", "tmp"),
     ("MPI_TMPDIR", "tmp/mpi"),
     ("OPAL_PREFIX_TMPDIR", "tmp/opal"),     # OMPI session dir fallback
-    # Apptainer/Singularity client-side state (exec of the plasma image)
+    # Apptainer client-side state: cache stays on Lustre (= the default
+    # $HOME/.apptainer in the production env); TMPDIR for apptainer itself
+    # is node-local /tmp like production -- see apptainer_job_env().
     ("APPTAINER_CACHEDIR", ".apptainer_cache"),
     ("SINGULARITY_CACHEDIR", ".apptainer_cache"),
-    ("APPTAINER_TMPDIR", "tmp/apptainer"),
-    ("SINGULARITY_TMPDIR", "tmp/apptainer"),
 ]
 
 
@@ -402,6 +407,12 @@ def apptainer_job_env(deploy_root: Path) -> dict:
     return {
         "APPTAINER_BINDPATH": str(deploy_root),
         "APPTAINER_CONFIGDIR": f"/tmp/{user}",
+        # apptainer's own tmp (instance + squashfuse session dirs) MUST be
+        # node-local /tmp as in the production env -- our global TMPDIR
+        # points at Lustre, and a FUSE session on Lustre is asking for the
+        # 'Terminating squashfuse_ll after timeout' class of failure.
+        "APPTAINER_TMPDIR": f"/tmp/{user}/apptainer",
+        "SINGULARITY_TMPDIR": f"/tmp/{user}/apptainer",
         "APPTAINER_SHARENS": "true",
     }
 
