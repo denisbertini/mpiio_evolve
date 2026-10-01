@@ -46,7 +46,9 @@ cluster:
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation. --mpi=pmix matches the
-  # image's PMIx 5 (srun_direct container mode).
+  # image's PMIx client (srun_direct container mode). The srun line is
+  # otherwise BARE: rank count comes from the #SBATCH header below, which
+  # every srun step inherits -- no redundant '-n' on the command line.
   extra_srun_args: "--mpi=pmix"
   wait: true                           # block sbatch with --wait
 
@@ -80,7 +82,9 @@ benchmark:
   # Switch to "ior_canary" for Lustre health checks / debugging, or let a
   # candidate override with {"benchmark_profile": "ior_canary"}.
   active: "epoch_io"
-  # ntasks defaults to cluster.nodes * cluster.tasks_per_node.
+  # ntasks defaults to cluster.nodes * cluster.tasks_per_node. When set, it
+  # is folded into the #SBATCH --ntasks-per-node header (must be divisible by
+  # cluster.nodes), because the allocation -- not srun -- owns the rank count.
   # ntasks: 32
 
   profiles:

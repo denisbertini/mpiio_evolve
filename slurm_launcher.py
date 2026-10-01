@@ -13,8 +13,8 @@ Assembles a cluster-native sbatch shell script on the fly for each candidate:
     export HF_HOME=... .triton ... XDG_* ... TMPDIR ...
     # ---- engine settings (MPIIO_HINTS file or OMPI_MCA_* array) ----
 
-    srun -n <ntasks> <benchmark command>
-    exit $?
+    srun <benchmark command>      # rank count comes from the #SBATCH
+    exit $?                       # allocation -- no redundant -n here
 
 Submission uses ``subprocess.run(["sbatch", "--wait", script])`` so the
 controller blocks until the run finishes and inherits the job's exit code.
@@ -147,7 +147,6 @@ class SlurmLauncher:
         resources: SlurmResources,
         command: str,
         env: Mapping[str, str],
-        ntasks: int,
         extra_srun_args: str = "",
         repetitions: int = 1,
     ) -> Path:
@@ -155,6 +154,11 @@ class SlurmLauncher:
 
         *env* is injected as an export block in the script HEADER, before any
         python/tooling can run, guaranteeing nothing writes to a missing $HOME.
+
+        The benchmark is launched with a BARE ``srun`` (plus *extra_srun_args*):
+        the rank count is fully defined by the #SBATCH --nodes/--ntasks-per-node
+        header, which srun inherits. Repeating ``-n`` on the command line is
+        redundant and misleading about who owns the resource decision.
 
         With *repetitions* > 1 the benchmark runs in an in-job loop; each pass
         is delimited by ``=== MPIIO_EVOLVE_REP k ===`` markers that
@@ -181,7 +185,7 @@ class SlurmLauncher:
             'echo "mpiio_evolve: MPIIO_HINTS=${MPIIO_HINTS:-<unset>} '
             'OMPI_MCA_io_ompio_num_aggregators=${OMPI_MCA_io_ompio_num_aggregators:-<unset>}"',
             "",
-            self._benchmark_block(command, ntasks, extra_srun_args, repetitions),
+            self._benchmark_block(command, extra_srun_args, repetitions),
             "",
         ]
 
@@ -192,9 +196,11 @@ class SlurmLauncher:
         return script_path
 
     @staticmethod
-    def _benchmark_block(command: str, ntasks: int,
+    def _benchmark_block(command: str,
                          extra_srun_args: str, repetitions: int) -> str:
-        srun = f"srun {extra_srun_args} -n {ntasks} {command}".replace("  ", " ")
+        # Bare srun: --nodes/--ntasks-per-node in the #SBATCH header define
+        # the allocation, and every srun step inherits it in full.
+        srun = f"srun {extra_srun_args} {command}".replace("  ", " ")
         if repetitions <= 1:
             return f"{srun}\nexit $?"
         return (

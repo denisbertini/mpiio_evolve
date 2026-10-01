@@ -345,8 +345,21 @@ def evaluate(candidate: Mapping[str, Any],
         prof_cmd, prof = _resolve_profile(cfg, cand)
         profile_name = str(cand.get("benchmark_profile")
                            or cfg.get("benchmark", {}).get("active", "default"))
-        ntasks = int(prof.get("ntasks")
-                     or cfg["cluster"]["nodes"] * cfg["cluster"]["tasks_per_node"])
+        resources = SlurmResources.from_config(
+            cfg["cluster"], job_name=f"ev-{run_id}")
+        prof_nt = prof.get("ntasks")
+        if prof_nt:
+            n = int(prof_nt)
+            if n % resources.nodes == 0:
+                # Rank-count override belongs in the #SBATCH header, so the
+                # allocation stays the single source of truth (srun is bare).
+                resources.tasks_per_node = n // resources.nodes
+            else:
+                logger.warning("profile ntasks=%d not divisible by nodes=%d"
+                               " -- allocation (%d ranks) wins", n,
+                               resources.nodes,
+                               resources.nodes * resources.tasks_per_node)
+        ntasks = resources.nodes * resources.tasks_per_node
         full_cmd = (f"{container} " if container else "") + str(prof_cmd)
         command = full_cmd.format(
             ntasks=ntasks,
@@ -360,8 +373,6 @@ def evaluate(candidate: Mapping[str, Any],
             hints_file=hints_file or "",
         )
         launcher = SlurmLauncher(ws, dry_run=simulate)
-        resources = SlurmResources.from_config(cfg["cluster"],
-                                               job_name=f"ev-{run_id}")
         extra_srun = str(cfg["cluster"].get("extra_srun_args", "") or "")
         job_timeout = _time_limit_seconds(cfg["cluster"]) + 120
         wait = bool(cfg["cluster"].get("wait", True))
@@ -380,7 +391,7 @@ def evaluate(candidate: Mapping[str, Any],
             for k in range(1, reps + 1):
                 rdir = run_dir / f"rep{k}"
                 script_k = launcher.build_script(
-                    rdir, resources, command, env, ntasks,
+                    rdir, resources, command, env,
                     extra_srun_args=extra_srun)
                 res_k = launcher.submit(script_k, wait=wait, timeout=job_timeout)
                 if res_k.simulated:
@@ -396,7 +407,7 @@ def evaluate(candidate: Mapping[str, Any],
             exit_code = max(exit_codes)
         else:
             script = launcher.build_script(
-                run_dir, resources, command, env, ntasks,
+                run_dir, resources, command, env,
                 extra_srun_args=extra_srun, repetitions=reps)
             result = launcher.submit(script, wait=wait, timeout=job_timeout)
             if result.simulated:
