@@ -373,7 +373,7 @@ yum install -y lustre-client lustre-client-devel
   cd ior/
   git checkout 4.0.0
   ./bootstrap
-  ./configure --with-lustre --with-hfd5 --prefix=/usr/local
+  ./configure --with-lustre --with-hdf5 --prefix=/usr/local
   make -j$(nproc)
   make -j$(nproc) install
   rm -rf /tmp/io
