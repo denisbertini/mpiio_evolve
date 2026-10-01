@@ -5,7 +5,8 @@
     "runs_subdir": "runs",
     "home_subdir": ".fake_home",
     "keep_data": false,
-    "keep_runs": 200
+    "keep_runs": 200,
+    "lustre_strict": true
   },
   "cluster": {
     "partition": "compute",

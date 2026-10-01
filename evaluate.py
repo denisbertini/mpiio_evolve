@@ -320,7 +320,15 @@ def evaluate(candidate: Mapping[str, Any],
         io_cfg.stripe.validate(cfg["search_space"]["lustre"])
 
         # -- 2. Lustre layout ---------------------------------------------------
-        lustre = LustreConfigurator(dry_run=dry_run)
+        lustre = LustreConfigurator(dry_run=simulate)
+        if (not simulate and lustre.dry_run
+                and ws_cfg.get("lustre_strict", True)):
+            raise RuntimeError(
+                "lfs binary not found, but this is a real run: every "
+                "stripe_count/stripe_size mutation would silently do nothing "
+                "(a meaningless fitness landscape). Load the Lustre client or "
+                "add its directory to PATH; or set workspace.lustre_strict: "
+                "false to deliberately tune MPI-IO hints only.")
         layout_desc = lustre.apply(data_dir, io_cfg.stripe)
 
         # -- 3. engine artifacts ------------------------------------------------

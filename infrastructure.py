@@ -162,19 +162,39 @@ def _norm_hint(value: Any) -> str:
 class LustreConfigurator:
     """Apply Lustre layouts via ``lfs`` (no-op in dry-run mode)."""
 
+    #: EL9 keeps lfs in /usr/sbin for some installs; probe them as fallbacks.
+    _LFS_FALLBACKS = ("/usr/sbin/lfs", "/sbin/lfs")
+
     def __init__(self, dry_run: bool = False) -> None:
-        self.dry_run = dry_run or shutil.which("lfs") is None
-        if self.dry_run:
-            logger.warning("lfs unavailable -- Lustre striping will be simulated")
+        self.lfs_bin = self.find_lfs()
+        self.dry_run = dry_run or self.lfs_bin is None
+        if self.dry_run and self.lfs_bin:
+            logger.info("Lustre striping simulated (%s present, --dry-run)",
+                        self.lfs_bin)
+        elif self.dry_run:
+            logger.warning("lfs binary NOT FOUND -- Lustre striping cannot "
+                           "be applied on this host")
+
+    @staticmethod
+    def find_lfs():
+        """Resolve the lfs binary (PATH first, then common sbin locations)."""
+        found = shutil.which("lfs")
+        if found:
+            return found
+        for cand in LustreConfigurator._LFS_FALLBACKS:
+            if os.access(cand, os.X_OK):
+                return cand
+        return None
 
     @staticmethod
     def is_lustre(path: Path) -> bool:
         """Heuristic lustre detection via ``lfs df`` on *path*."""
-        if shutil.which("lfs") is None:
+        lfs_bin = LustreConfigurator.find_lfs()
+        if lfs_bin is None:
             return False
         try:
             out = subprocess.run(
-                ["lfs", "df", str(path)], capture_output=True, text=True, timeout=30
+                [lfs_bin, "df", str(path)], capture_output=True, text=True, timeout=30
             )
             return out.returncode == 0 and "lustre" in out.stdout.lower()
         except (OSError, subprocess.TimeoutExpired):
@@ -188,7 +208,7 @@ class LustreConfigurator:
         """
         directory.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "lfs", "setstripe",
+            self.lfs_bin or "lfs", "setstripe",
             "-c", str(spec.stripe_count),
             "-S", str(spec.stripe_size),
             str(directory),
@@ -212,7 +232,7 @@ class LustreConfigurator:
         if self.dry_run:
             return "[simulated] lfs getstripe unavailable"
         proc = subprocess.run(
-            ["lfs", "getstripe", "-v", str(directory)],
+            [self.lfs_bin or "lfs", "getstripe", "-v", str(directory)],
             capture_output=True, text=True, timeout=60,
         )
         return proc.stdout if proc.returncode == 0 else f"(lfs getstripe failed: {proc.stderr.strip()})"

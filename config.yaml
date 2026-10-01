@@ -28,6 +28,10 @@ workspace:
   home_subdir: ".fake_home"    # synthetic $HOME exported into Slurm jobs
   keep_data: false             # delete benchmark data files after each run
   keep_runs: 200               # garbage-collect oldest run dirs beyond this
+  # Real runs ABORT if no lfs binary exists: without it every stripe
+  # mutation is a silent no-op and the fitness landscape is meaningless.
+  # Set false only to deliberately tune MPI-IO hints on non-Lustre storage.
+  lustre_strict: true
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------
