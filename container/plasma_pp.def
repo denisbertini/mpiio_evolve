@@ -1,67 +1,48 @@
 Bootstrap: docker
-From: rockylinux/rockylinux:9.5
-
-# =============================================================================
-# mpiio_evolve container: full plasma-physics HPC stack for Virgo2 (GSI).
-#
-# Maintained copy of Denis's production definition (Rocky 9.5, PMIx 5.0.6,
-# UCX 1.18.0, Open MPI 5.0.7 --with-lustre/ucx/slurm, Lustre client 2.16.1,
-# HDF5 1.14.4, ADIOS2 2.10.2, openPMD 0.16.0, EPOCH 4.19.5, WarpX 25.01,
-# IOR, OSU microbenchmarks).
-#
-# mpiio_evolve-specific notes:
-#   * %environment sets OMPI_MCA_io=romio341 -> the ACTIVE MPI-IO component is
-#     the embedded ROMIO 3.4.1, NOT io_ompio. ROMIO hint files (MPIIO_HINTS)
-#     are therefore the primary tuning surface; the framework switches to
-#     io_ompio explicitly (OMPI_MCA_io=ompio) only for ompio-engine candidates.
-#   * Build via container/build_container.sh which redirects HOME/TMPDIR/
-#     APPTAINER_CACHEDIR into the /scratch workspace (no $HOME on this host).
-#   * FIX vs original: IOR configure flag "--with-hfd5" -> "--with-hdf5"
-#     (without it, IOR silently built WITHOUT the HDF5 driver).
-# =============================================================================
+From: rockylinux/rockylinux:9.7
 
 %labels
     APPLICATION_NAME Plasma Physics Simulation
     AUTHOR_NAME Denis Bertini
     AUTHOR_EMAIL D.Bertini@gsi.de
-    YEAR 2024
+    YEAR 2026
 
 %help
-    Container for Plasma Physics Simulations. 
-    It includes the latest version of OpenMPI compiled with:
-              - the latest UCX library
-              - the latest Lustre client
-    in order to use efficiently on Virgo2:
+    Container for Plasma Physics Simulations featuring latest MPI stack.
+    + It includes latest version of openMPI compiled with:
+              - latest UCX library
+              - latest Lustre 2.17 (el9)  client
+    + in order to use efficiently on Virgo:
             - the Infiniband interconnect Fabric.
-            - the Lustre filesystem
+	    - the Lustre filesystem
+
 
 %environment
     # Enable gcc-toolset
     source scl_source enable gcc-toolset-14
-    
+
     export OMPI_DIR=/usr/local
     export SINGULARITY_OMPI_DIR=$OMPI_DIR
-    export SINGULARITYENV_APPEND_PATH=$OMPI_DIR/bin
-    export SINGULARITYENV_APPEND_LD_LIBRARY_PATH=$OMPI_DIR/lib
+    export APPTAINERENV_APPEND_PATH=$OMPI_DIR/bin
+    export APPTAINERENV_APPEND_LD_LIBRARY_PATH=$OMPI_DIR/lib:$OMPI_DIR/lib64
     export PATH=$OMPI_DIR/bin:$PATH
     export LD_LIBRARY_PATH=$OMPI_DIR/lib:$LD_LIBRARY_PATH
     export PATH=/usr/local/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH    
-    # OpenMPI specifics
-    # NOTE: romio341 is the embedded ROMIO -> MPI-IO hint tuning applies.
+    export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH
+
+    # openMPI specifics
     export OMPI_MCA_io=romio341
-    
+
     # epoch + openpmd-api
-    export PY_API=3.12
+    export PY_API=3.12	
     export PYTHONPATH=/root/.local/lib/python$PY_API/site-packages/
     export PYTHONPATH=/usr/local/lib/python$PY_API/site-packages/:$PYTHONPATH
     export PYTHONPATH=/usr/local/lib64/python$PY_API/site-packages/:$PYTHONPATH    
     export PYTHONPATH=/opt/opmd/openPMD-api/build/lib64/python$PY_API/site-packages:$PYTHONPATH
     export PYTHONPATH=/opt/epoch/python$PY_API:$PYTHONPATH
     export PYTHONPATH=/opt/epoch/python$PY_API/sdf-1.0-py$PY_API-linux-x86_64.egg/:$PYTHONPATH   
-
+    
 %post
-
    #
    # Base upstream software
    #
@@ -75,7 +56,8 @@ From: rockylinux/rockylinux:9.5
     dnf install -y dnf-plugins-core
     dnf config-manager --set-enabled crb
     dnf groupinstall -y 'Development Tools'
-    dnf install -y wget git bash hostname gcc gcc-gfortran gcc-c++ libatomic make file autoconf automake libtool zlib-devel python3-devel
+
+    dnf install -y wget git bash hostname gcc gcc-gfortran gcc-c++ libatomic make file autoconf-latest automake libtool zlib-devel python3-devel
     dnf install -y libmnl lsof numactl-libs ethtool tcl tk sqlite-devel
     dnf install -y sysstat
     
@@ -96,8 +78,19 @@ From: rockylinux/rockylinux:9.5
     dnf install -y hwloc-devel
     dnf install -y libibverbs-devel    
 
-   # Install R
-    dnf install -y R
+
+   ## Packages add-on for WarpX
+   dnf install -y boost-devel   
+
+   ## Add-ons for python's packages
+    dnf install -y openssl-devel bzip2-devel libffi-devel
+    dnf install -y alternatives
+
+   ## Scientific libraries
+   dnf install -y glibc-headers
+   #dnf install -y libiconv libiconv-devel
+   dnf install -y openblas openblas-devel
+   dnf install -y lapack lapack-devel blas blas-devel
 
    #
    # (Re) Install python package
@@ -151,7 +144,6 @@ From: rockylinux/rockylinux:9.5
    python3 -m pip --no-cache-dir install setuptools --upgrade
    python3 -m pip --no-cache-dir install psutil schedule 
    python3 -m pip --no-cache-dir install SQLAlchemy
-   python3 -m pip --no-cache-dir install rpy2
    python3 -m pip --no-cache-dir install dash    
         
    ## Install Data Science packages
@@ -193,7 +185,7 @@ From: rockylinux/rockylinux:9.5
    CUSTOM_ENV=/.singularity.d/env/99-zz_custom_env.sh
    cat >$CUSTOM_ENV <<EOF
 #!/bin/bash
-PS1="[pp_slurm]\w \$ "
+PS1="[pp_cpu\w \$ "
 EOF
    chmod 755 $CUSTOM_ENV
 
@@ -201,7 +193,7 @@ EOF
 [lustre-client]
 name=Lustre Client
 gpgcheck=0
-baseurl=http://downloads.whamcloud.com/public/lustre/lustre-2.16.1/el9.4/client
+baseurl=http://downloads.whamcloud.com/public/lustre/lustre-2.17.0/el9.7/client
 EOF
 yum install -y lustre-client lustre-client-devel
 
@@ -210,16 +202,15 @@ yum install -y lustre-client lustre-client-devel
    dnf install -y gcc-toolset-14
    source scl_source enable gcc-toolset-14
 
-   # Install Rust 
-    dnf install -y rust
-    dnf install -y rust-src rust-doc
-
-
+   # Set up the environment (for the container build process)
+   #export PATH=/usr/local/cuda/bin:${PATH}
+   #export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib:${LD_LIBRARY_PATH}
+ 
    #
    # PMIx 
    #
 
-   export VPMIX_VERSION=5.0.6
+   export VPMIX_VERSION=6.0.0
    echo "Installing PMIx version: " $VPMIX_VERSION	
    mkdir -p /opt/pmix
    cd /opt/pmix
@@ -231,11 +222,24 @@ yum install -y lustre-client lustre-client-devel
    make -j$(nproc) install      
    #rm -rf /tmp/pmix
 
+   export PRRTE_VERSION=4.0.0
+   echo "Installing PRRTE version: " $PRRTE_VERSION	
+   mkdir -p /opt/prrte
+   cd /opt/prrte
+   wget -c https://github.com/openpmix/prrte/releases/download/v$PRRTE_VERSION/prrte-$PRRTE_VERSION.tar.gz
+   tar xf prrte-$PRRTE_VERSION.tar.gz
+   cd prrte-$PRRTE_VERSION
+   ./configure --prefix=/usr/local --with-pmix=/usr/local --with-slurm  && \
+   make -j$(nproc)
+   make -j$(nproc) install      
+   #rm -rf /tmp/prrte
+
+
    #
    # UCX
    #
 
-   export UCX_VERSION=1.18.0
+   export UCX_VERSION=1.22.0
    echo "Installing UCX version:  " $UCX_VERSION
    cd /
    mkdir -p /var/tmp && wget -q -nc --no-check-certificate -P /var/tmp https://github.com/openucx/ucx/releases/download/v$UCX_VERSION/ucx-$UCX_VERSION.tar.gz
@@ -250,7 +254,7 @@ yum install -y lustre-client lustre-client-devel
    #
  
    export OMPI_DIR=/usr/local
-   export OMPI_VERSION=5.0.7
+   export OMPI_VERSION=5.0.11
    export OMPI_URL="https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-$OMPI_VERSION.tar.bz2"
    echo "Installing OpenMPI version: " $OMPI_VERSION
    mkdir -p /root/ompi
@@ -259,7 +263,7 @@ yum install -y lustre-client lustre-client-devel
 
    # Compile and install
    cd /root/ompi/openmpi-$OMPI_VERSION
-   ./configure --prefix=$OMPI_DIR --with-pmix=/usr/local --with-libevent=/usr --with-ompi-pmix-rte --with-orte=no --disable-oshmem --enable-mpirun-prefix-by-default --enable-shared  --without-verbs --with-hwloc --with-ucx=/usr/local/ucx --with-lustre --with-slurm --enable-mca-no-build=btl-uct --disable-sphinx
+   ./configure --prefix=$OMPI_DIR --with-pmix=/usr/local --with-prrte=/usr/local --with-libevent=/usr --with-ompi-pmix-rte --with-orte=no --disable-oshmem --enable-mpirun-prefix-by-default --enable-shared  --without-verbs --with-hwloc --with-ucx=/usr/local/ucx --with-lustre --with-slurm --enable-mca-no-build=btl-uct --disable-sphinx
    make -j$(nproc)
    make -j$(nproc) install
 
@@ -284,11 +288,10 @@ yum install -y lustre-client lustre-client-devel
   #
   
   export CMAKE_DIR=/usr/local
-  export CMAKE_VERSION=3.31.4
+  export CMAKE_VERSION=4.4.3
   echo "Installing CMake version: " $CMAKE_VERSION
   mkdir -p /tmp/cmake
   cd /tmp/cmake
-  #wget -q -nc --no-check-certificate -P /root/cmake  https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.sh
   curl -OL https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.sh
   /bin/sh /tmp/cmake/cmake-$CMAKE_VERSION-linux-x86_64.sh --prefix=/usr/local --skip-license 
   rm -rf /tmp/cmake
@@ -296,26 +299,36 @@ yum install -y lustre-client lustre-client-devel
 
 
   #
-  # HDF5
+  # Install HDF5
   #
-
-  export HDF5_VERSION=1.14.4-3
+  
+  export HDF5_VERSION=2.2.0
   echo "Installing HDF5 version: " $HDF5_VERSION
   cd /tmp
-  wget -q -nc --no-check-certificate -L https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.14/hdf5-1.14.4/src/hdf5-$HDF5_VERSION.tar.gz 
-  tar -x -f hdf5-$HDF5_VERSION.tar.gz
+  rm -rf hdf5-$HDF5_VERSION/
+  /usr/bin/wget -c https://github.com/HDFGroup/hdf5/releases/download/$HDF5_VERSION/hdf5-$HDF5_VERSION.tar.gz 
+  tar -xf hdf5-$HDF5_VERSION.tar.gz
   cd hdf5-$HDF5_VERSION/
-  ./configure --prefix=/usr/local/ --enable-parallel --enable-fortran --enable-fortran2003 --enable-shared CC=/usr/local/bin/mpicc CXX=/usr/local/bin/mpicxx FC=/usr/local/bin/mpif90 
+  mkdir build
+  cd build
+  cmake .. \
+  -DCMAKE_INSTALL_PREFIX=/usr/local \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DHDF5_ENABLE_PARALLEL=ON \
+  -DHDF5_BUILD_FORTRAN=ON \
+  -DHDF5_BUILD_CPP_LIB=OFF \
+  -DHDF5_BUILD_HL_LIB=ON \
+  -DBUILD_SHARED_LIBS=ON
+
   make -j$(nproc) 
   make -j$(nproc) install 
   rm -rf /tmp/hdf5-$HDF5_VERSION/
-  
 
   #
   # ADIOS2
   #
   
-  export ADIOS_VERSION=2.10.2
+  export ADIOS_VERSION=2.12.1
   echo "Installing ADIOS2 version: " $ADIOS_VERSION
   rm -rf /tmp/adios
   mkdir -p /tmp/adios
@@ -325,12 +338,11 @@ yum install -y lustre-client lustre-client-devel
   git checkout v$ADIOS_VERSION
   mkdir adios2-build
   cd adios2-build
-  #Need to explicitely set the path for python
-  cmake ../ -DCMAKE_PREFIX_INSTALL=/usr/local/ -DADIOS2_BUILD_EXAMPLES=OFF -DADIOS2_BUILD_TESTING=OFF -DADIOS2_USE_Fortran=ON -DADIOS2_USE_HDF5=OFF -DCMAKE_CXX_FLAGS=-fPIC   
+  cmake ../ -DCMAKE_PREFIX_INSTALL=/usr/local/ -DADIOS2_BUILD_EXAMPLES=OFF -DADIOS2_BUILD_TESTING=OFF -DADIOS2_USE_Fortran=ON -DADIOS2_USE_HDF5=OFF -DCMAKE_CXX_FLAGS=-fPIC 
   make -j$(nproc)
   make -j$(nproc) install  
   rm -rf /tmp/adios
-  PATH=/usr/local/bin:$PATH
+  PATH=/usr/local/bin:$PATH   
 
   #
   # openPMD-API
@@ -340,10 +352,10 @@ yum install -y lustre-client lustre-client-devel
   cd /opt/opmd
   git clone  https://github.com/openPMD/openPMD-api.git openPMD-api
   cd /opt/opmd/openPMD-api
-  git checkout 0.16.0 
+  git checkout 0.17.1
   mkdir -p /opt/opmd/openPMD-api/build
   cd /opt/opmd/openPMD-api/build
-  cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DopenPMD_USE_ADIOS2=ON -DopenPMD_USE_ADIOS1=OFF -DopenPMD_USE_PYTHON=ON /opt/opmd/openPMD-api
+  cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DopenPMD_USE_ADIOS2=ON -DopenPMD_USE_ADIOS1=OFF -DopenPMD_USE_PYTHON=ON /opt/opmd/openPMD-api
   cmake --build /opt/opmd/openPMD-api/build --target install -- -j$(nproc)
 
   # OpenPMD_Viewer 
@@ -351,10 +363,27 @@ yum install -y lustre-client lustre-client-devel
 
 
   #
+  # IOR
+  #
+  
+  rm -rf /tmp/io
+  mkdir -p /tmp/io
+  cd /tmp/io
+  git clone https://github.com/hpc/ior.git 
+  cd ior/
+  git checkout 4.0.0
+  ./bootstrap
+  ./configure --with-lustre --with-hfd5 --prefix=/usr/local
+  make -j$(nproc)
+  make -j$(nproc) install
+  rm -rf /tmp/io
+
+
+  #
   # OSU microbenchmarks
   #
-
-  export OSU_VERSION=7.5
+ 
+  export OSU_VERSION=7.5.2
   echo "Installing OSU Microbenchmarks version: " $OSU_VERSION
   cd /tmp
   wget -c https://mvapich.cse.ohio-state.edu/download/mvapich/osu-micro-benchmarks-$OSU_VERSION.tar.gz
@@ -368,30 +397,13 @@ yum install -y lustre-client lustre-client-devel
   cp -R /usr/local/osu/libexec/osu-micro-benchmarks/mpi/* /usr/local/bin
   rm -rf /tmp/osu-micro-benchmarks-$OSU_VERSION/  
 
-  #
-  # IOR
-  #
-  
-  rm -rf /tmp/io
-  mkdir -p /tmp/io
-  cd /tmp/io
-  git clone https://github.com/hpc/ior.git 
-  cd ior/  
-  ./bootstrap
-  # FIXED: original had the typo "--with-hfd5" which silently disabled HDF5 support
-  ./configure --with-lustre --with-hdf5 --prefix=/usr/local
-  make -j$(nproc)
-  make -j$(nproc) install
-  rm -rf /tmp/io
-
-
 
   #
   # Epoch
   # + python SDF module
   #
   
-  export EPOCH_VERSION=4.19.5
+  export EPOCH_VERSION=4.20.1	  
   echo " Installing EPOCH version: " $EPOCH_VERSION
   cd /usr/local/
   git clone --recursive https://github.com/Warwick-Plasma/epoch.git
@@ -405,17 +417,17 @@ yum install -y lustre-client lustre-client-devel
   cp bin/epoch1d /usr/local/bin
   make sdfutils  
   cd ../epoch2d
-  sed -i 's/FFLAGS = -O3 -g -std=f2003/FFLAGS = -O3 -g -std=f2003 -fPIC/g' Makefile
+  sed -i 's/FFLAGS = -O3 -g -std=f2003/FFLAGS = -O3 -g -std=f2003 -fPIC/g' Makefile  
   sed -i 's/#DEFINES += $(D)PARTICLE_ID$/DEFINES += $(D)PARTICLE_ID/g' Makefile  
   make -j$(nproc)
   cp bin/epoch2d /usr/local/bin
   make sdfutils  
   cd ../epoch3d
-  sed -i 's/FFLAGS = -O3 -g -std=f2003/FFLAGS = -O3 -g -std=f2003 -fPIC/g' Makefile
+  sed -i 's/FFLAGS = -O3 -g -std=f2003/FFLAGS = -O3 -g -std=f2003 -fPIC/g' Makefile  
   sed -i 's/#DEFINES += $(D)PARTICLE_ID$/DEFINES += $(D)PARTICLE_ID/g' Makefile  
   make -j$(nproc)
   cp bin/epoch3d /usr/local/bin
-  make sdfutils  
+  make sdfutils
   cd /usr/local/epoch
   cd epoch1d
   make clean
@@ -439,7 +451,7 @@ yum install -y lustre-client lustre-client-devel
   # WarpX
   # With openMPI + OpenMP + openPMD  only
   #
-  export WARPX_VERSION=25.01  
+  export WARPX_VERSION=26.09  
   echo "INstalling WarpX version: " $WARPX_VERSION
   
   rm   -rf /tmp/warp
@@ -463,5 +475,9 @@ yum install -y lustre-client lustre-client-devel
   ln -s warpx.rz.MPI.OMP.DP.PDP.OPMD.QED warpx_rz
 
 
+
 %runscript
-exec /usr/local/bin/$*
+exec /bin/bash "$@"
+%startscript
+exec /bin/bash "$@"
+

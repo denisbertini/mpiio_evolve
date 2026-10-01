@@ -22,7 +22,7 @@ workspace:
   #     <root>/<state_dir>/{runs, .fake_home, tmp, ...}
   # Pick one per user/controller instance so concurrent evolutions never
   # collide. Override: MPIIO_EVOLVE_STATE_DIR, --state-dir, or edit here.
-  state_dir: "default"
+  state_dir: "ppio_tune"
 
   runs_subdir: "runs"          # per-candidate run directories
   home_subdir: ".fake_home"    # synthetic $HOME exported into Slurm jobs
@@ -35,14 +35,14 @@ workspace:
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------
-  partition: "compute"
-  account: "io_optimization"          # TODO: your Slurm account/allocation
+  partition: "nvidia_gpu"
+  account: "rz"          # TODO: your Slurm account/allocation
   qos: null                            # optional QoS
   nodes: 1
   tasks_per_node: 32
   cpus_per_task: 1
   mem_per_cpu: "4000M"
-  time_limit: "00:10:00"
+  time_limit: "01:00:00"
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation. --mpi=pmix matches the
