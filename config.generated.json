@@ -35,7 +35,8 @@
     "active": "epoch_io",
     "profiles": {
       "epoch_io": {
-        "command": "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
+        "command": "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}",
+        "measure_script": "bash {repo}/benchmarks/epoch_io/measure.sh {data_dir}"
       }
     }
   },

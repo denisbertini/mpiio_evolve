@@ -1,106 +1,44 @@
 #!/bin/bash
 # =============================================================================
-# mpiio_evolve -- EPOCH 3D LWFA MPI-IO benchmark runner
+# mpiio_evolve -- EPOCH 3D LWFA rank shim (srun_direct mode)
 #
-# Runs INSIDE the apptainer image, launched by srun: ONE wrapper per rank
-# (srun_direct mode). All ranks execute epoch3d; rank 0 then aggregates the
-# total SDF diagnostic volume and elapsed wall time and prints the
-# generic-parsable fitness line:
+# Executed ONCE PER MPI RANK inside the container:
+#   srun --mpi=pmix  ->  one apptainer exec per task  ->  this script -> epoch3d
+# srun IS the MPI launcher (spawn + PMIx bootstrap of MPI_COMM_WORLD at
+# MPI_Init); no mpirun is needed or wanted inside the container.
 #
-#     aggregate write bandwidth: <X> GiB/s
-#
-# The deck (benchmarks/epoch_io/epoch3d_lwfa.deck) is a light 3D LWFA run
-# with two dump streams -- tracer particles every 1 fs and fields+particles
-# every 5 fs -- i.e. the checkpoint pressure pattern our users generate.
+# This shim deliberately measures NOTHING and coordinates with no rank:
+# after srun returns (srun is the barrier), the batch script runs
+# measure.sh once per repetition. No stamps, no wait loops, no races.
 #
 # Env (all optional):
-#   EPOCH_BIN   epoch binary               (default: epoch3d_lstr)
-#   EPOCH_DECK  deck file in this folder   (default: epoch3d_lwfa.deck)
+#   EPOCH_BIN         epoch binary            (default: epoch3d_lstr)
+#   EPOCH_DECK        deck file in this dir   (default: epoch3d_lwfa.deck)
+#   MPIIO_EVOLVE_REP  in-job repetition index (default: 1)
 # =============================================================================
 set -uo pipefail
 
 DATA_DIR="${1:?usage: run_bench.sh <data_dir>}"
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DECK="${EPOCH_DECK:-epoch3d_lwfa.deck}"
-# _lstr variant: same build with string_length=100000 for long Lustre paths
+# _lstr variant: same build, string_length=100000 for long Lustre paths
 EPOCH_BIN="${EPOCH_BIN:-epoch3d_lstr}"
-RANK="${SLURM_PROCID:-0}"
-NTASKS="${SLURM_NTASKS:-1}"
-# In-job repetition token set by the launcher's srun loop; isolates every
-# rep into its own data subdir so concurrent ranks can never race on shared
-# cleanup (a late rank of rep k must not delete rep k+1 output/stamps).
 REP="${MPIIO_EVOLVE_REP:-1}"
+
+# One directory per repetition: reps never share files.
 DATA_DIR="$DATA_DIR/rep$REP"
-
-# ---- RANK-AWARE BY CONSTRUCTION ---------------------------------------------
-# This wrapper runs ONCE PER MPI RANK (srun_direct: srun --mpi=pmix spawns
-# one apptainer exec per task; PMIx bootstraps epoch3d's MPI_COMM_WORLD via
-# MPI_Init -- no mpirun is needed or wanted inside the container).
-# Therefore the setup below is deliberately racy-safe: mkdir -p is
-# idempotent, the deck is read in place from the repo (never copied), and
-# each rank only ever removes its OWN stamp files.
-
-if ! command -v "$EPOCH_BIN" >/dev/null 2>&1; then
-    echo "epoch_io: benchmark binary '$EPOCH_BIN' not found in container" >&2
-    exit 127
-fi
-
 mkdir -p "$DATA_DIR" || exit 2
 cd "$DATA_DIR" || exit 2
-rm -f ".rank_done.$RANK" ".rank_rc.$RANK" "$(printf '%04d.sdf' "$RANK")" 2>/dev/null || true
+
+# Deck read in place from the repo (read-only); SDF diagnostics land in cwd.
 DECK_PATH="$BENCH_DIR/$DECK"
 [ -f "$DECK_PATH" ] || { echo "epoch_io: deck $DECK_PATH missing" >&2; exit 2; }
+command -v "$EPOCH_BIN" >/dev/null 2>&1 || {
+    echo "epoch_io: benchmark binary '$EPOCH_BIN' not found in container" >&2
+    exit 127
+}
 
-# ---- every rank runs the simulation (EPOCH is one MPI rank per process) ----
-# Deck is read in place from the repo; SDF output lands in cwd ($DATA_DIR).
-epoch_log="epoch_stdout_rank${RANK}.log"
-start_ns=$(date +%s%N)
-"$EPOCH_BIN" "$DECK_PATH" > "$epoch_log" 2>&1
-rc=$?
-echo "$rc" > ".rank_rc.$RANK"
-touch ".rank_done.$RANK"
-
-if [ "$RANK" != "0" ]; then
-    exit "$rc"
-fi
-
-# ---- rank 0: wait for stragglers, then measure ------------------------------
-deadline=$(( $(date +%s) + 180 ))
-while [ "$(ls .rank_done.* 2>/dev/null | wc -l)" -lt "$NTASKS" ]; do
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-        echo "epoch_io: rank0 timed out waiting for rank completion stamps" >&2
-        break
-    fi
-    sleep 2
-done
-end_ns=$(date +%s%N)
-elapsed=$(awk -v a="$start_ns" -v b="$end_ns" 'BEGIN{printf "%.3f",(b-a)/1e9}')
-
-fail=$(cat .rank_rc.* 2>/dev/null | awk '{s+=$1} END{print s+0}')
-if [ "$fail" != "0" ]; then
-    echo "epoch_io: EPOCH failed on one or more ranks (sum of exit codes = $fail)" >&2
-    tail -n 40 "$epoch_log" >&2
-    exit 1
-fi
-
-# Total diagnostic bytes written to Lustre during the trial
-bytes=$(du -cb -- *.sdf 2>/dev/null | tail -n1 | awk '{print $1+0}')
-bytes=${bytes:-0}
-read -r gib gibs mibs <<EOF2
-$(awk -v b="$bytes" -v t="$elapsed" 'BEGIN{
-    g=b/1073741824;
-    s=(t>0)?g/t:0;
-    printf "%.4f %.4f %.2f", g, s, s*1024
-}')
-EOF2
-
-if awk -v g="$gib" 'BEGIN{exit (g<=0)}'; then
-    echo "epoch_io: EPOCH exited 0 but produced no .sdf diagnostics -- deck likely rejected" >&2
-    tail -n 40 "$epoch_log" >&2
-    exit 1
-fi
-
-echo "epoch_io: wrote ${gib} GiB of SDF diagnostics in ${elapsed} s across ${NTASKS} ranks"
-echo "aggregate write bandwidth: ${gibs} GiB/s"
-echo "epoch total wallclock: ${elapsed} seconds"
-exit 0
+# EPOCH owns the I/O pattern entirely -- collective buffering to a shared
+# file (the MPI-IO path our ROMIO hints tune) or per-rank SDFs, per deck.
+# The shim only places cwd on the striped Lustre directory and execs.
+exec "$EPOCH_BIN" "$DECK_PATH"

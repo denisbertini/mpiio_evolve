@@ -100,6 +100,11 @@ benchmark:
       # which parser.py scores. Tune the deck's dt_snapshot cadence to
       # mirror your production checkpoint cadence.
       command: "bash {repo}/benchmarks/epoch_io/run_bench.sh {data_dir}"
+      # Post-step run by the batch script once per repetition AFTER srun
+      # returned (srun = barrier -> all ranks closed their files; no per-rank
+      # coordination anywhere). Sums *.sdf bytes / wall time, layout-agnostic
+      # (single shared collective-buffered file or per-rank SDFs).
+      measure_script: "bash {repo}/benchmarks/epoch_io/measure.sh {data_dir}"
 
 # =============================================================================
 # SEARCH SPACE - boundaries handed to the LLM mutation prompt

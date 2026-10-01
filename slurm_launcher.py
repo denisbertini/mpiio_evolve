@@ -149,6 +149,7 @@ class SlurmLauncher:
         env: Mapping[str, str],
         extra_srun_args: str = "",
         repetitions: int = 1,
+        measure_script: str = "",
     ) -> Path:
         """Render the complete sbatch script into *run_dir* and return its path.
 
@@ -185,7 +186,8 @@ class SlurmLauncher:
             'echo "mpiio_evolve: MPIIO_HINTS=${MPIIO_HINTS:-<unset>} '
             'OMPI_MCA_io_ompio_num_aggregators=${OMPI_MCA_io_ompio_num_aggregators:-<unset>}"',
             "",
-            self._benchmark_block(command, extra_srun_args, repetitions),
+            self._benchmark_block(command, extra_srun_args, repetitions,
+                                  measure_script),
             "",
         ]
 
@@ -197,26 +199,45 @@ class SlurmLauncher:
 
     @staticmethod
     def _benchmark_block(command: str,
-                         extra_srun_args: str, repetitions: int) -> str:
+                         extra_srun_args: str, repetitions: int,
+                         measure_script: str = "") -> str:
         # Bare srun: --nodes/--ntasks-per-node in the #SBATCH header define
         # the allocation, and every srun step inherits it in full.
         srun = f"srun {extra_srun_args} {command}".replace("  ", " ")
+        # Optional post-step: a profile may provide a *measure_script* that
+        # runs ONCE per repetition on the host shell AFTER srun returned
+        # (srun is the barrier -- all ranks done, zero coordination).
+        # t0/t1 bracket the srun call; the script receives them as $2/$3.
         if repetitions <= 1:
-            return f"{srun}\nexit $?"
-        # MPIIO_EVOLVE_REP propagates through srun into every rank's
-        # environment; the wrapper uses it to give each rep its own data
-        # subdir, which makes concurrent-rank cleanup race-free.
-        return (
-            "worst_rc=0\n"
-            f"for rep in $(seq 1 {repetitions}); do\n"
-            '  echo "=== MPIIO_EVOLVE_REP ${rep} ==="\n'
-            f"  MPIIO_EVOLVE_REP=${{rep}} {srun}\n"
-            "  rc=$?\n"
-            '  echo "=== MPIIO_EVOLVE_REP_END ${rep} rc=${rc} ==="\n'
-            "  if [ $rc -gt $worst_rc ]; then worst_rc=$rc; fi\n"
-            "done\n"
-            "exit $worst_rc"
-        )
+            if not measure_script:
+                return f"{srun}\nexit $?"
+            return (
+                "t0=$(date +%s%N)\n"
+                f"{srun}\n"
+                "rc=$?\n"
+                "t1=$(date +%s%N)\n"
+                f"{measure_script} \"$t0\" \"$t1\" || true\n"
+                "exit $rc"
+            )
+        lines = [
+            "worst_rc=0",
+            f"for rep in $(seq 1 {repetitions}); do",
+            '  echo "=== MPIIO_EVOLVE_REP ${rep} ==="',
+            "  t0=$(date +%s%N)",
+            f"  MPIIO_EVOLVE_REP=${{rep}} {srun}",
+            "  rc=$?",
+            "  t1=$(date +%s%N)",
+        ]
+        if measure_script:
+            lines.append(f'  MPIIO_EVOLVE_REP=${{rep}} {measure_script} "$t0" '
+                         '"$t1" || true')
+        lines += [
+            '  echo "=== MPIIO_EVOLVE_REP_END ${rep} rc=${rc} ==="',
+            "  if [ $rc -gt $worst_rc ]; then worst_rc=$rc; fi",
+            "done",
+            "exit $worst_rc",
+        ]
+        return "\n".join(lines)
 
     # ---- submission ----------------------------------------------------------
 
