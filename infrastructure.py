@@ -291,8 +291,15 @@ def romio_environment(hints_file: Optional[Path]) -> dict:
     MPICH_* debug export here -- MPICH does not run on this stack. ROMIO's
     own debug channel is MPIIO_DEBUG=<category,...>, but it only produces
     output on specially-built ROMIO; enable it manually when diagnosing.
+
+    The io component is pinned explicitly (OMPI_MCA_io=romio341, as in
+    Denis's production run_file.sh) rather than trusting the image default,
+    so a baseline candidate is fully specified by the generated script.
     """
-    return {"MPIIO_HINTS": str(hints_file)} if hints_file else {}
+    env = {"OMPI_MCA_io": "romio341"}
+    if hints_file:
+        env["MPIIO_HINTS"] = str(hints_file)
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +425,9 @@ def build_job_environment(
     """
     env = isolated_home(Path(workspace_root) / home_subdir)
     env.update(apptainer_job_env(Path(workspace_root).resolve().parent))
+    # MPI-rank hygiene from Denis's production run_file.sh: one thread per
+    # rank -- prevents accidental OpenMP oversubscription of the cores.
+    env["OMP_NUM_THREADS"] = "1"
 
     if config.engine == "romio":
         env.update(romio_environment(hints_file))

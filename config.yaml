@@ -45,11 +45,12 @@ cluster:
   time_limit: "10:00:00"               # covers all in-job reps with headroom
   constraint: null                     # e.g. "lustre" node feature tag
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
-  # srun flags appended to the benchmark invocation. --mpi=pmix matches the
-  # image's PMIx client (srun_direct container mode). The srun line is
-  # otherwise BARE: rank count comes from the #SBATCH header below, which
-  # every srun step inherits -- no redundant '-n' on the command line.
-  extra_srun_args: "--mpi=pmix"
+  # srun flags appended to the benchmark invocation, matching Denis's
+  # validated run_file.sh: --mpi=pmix bootstraps MPI via PMIx (srun IS the
+  # MPI launcher, no mpirun inside), --export=ALL propagates the job env
+  # into every rank. The srun line is otherwise BARE: rank count comes
+  # from the #SBATCH header, which every srun step inherits.
+  extra_srun_args: "--mpi=pmix --export=ALL"
   wait: true                           # block sbatch with --wait
 
   # ---- MPI engine selection ------------------------------------------------

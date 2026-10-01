@@ -19,7 +19,7 @@
     "time_limit": "10:00:00",
     "constraint": null,
     "extra_sbatch": [],
-    "extra_srun_args": "--mpi=pmix",
+    "extra_srun_args": "--mpi=pmix --export=ALL",
     "wait": true,
     "mpi_engine": "auto",
     "default_engine": "romio"
