@@ -1,0 +1,228 @@
+begin:constant
+  # --- uncomment for debug: sim should run in <5min using 6 procs on nlopc46
+  #cells_per_x = 12 / micron
+  #cells_per_y = 8 / micron
+  #npart_per_cell_electron = 1
+
+  # full parameters
+  xlength = 60 * micron
+  ylength = 30 * micron
+  zlength = 30 * micron
+  cells_per_x = 18 / micron
+  cells_per_y = 7.5 / micron
+  cells_per_z = 7.5 / micron
+  grid_x_min = - xlength + 10 * micron
+  grid_y_min = -ylength/2
+  grid_z_min = -ylength/2
+  npart_per_cell_electron = 1
+  tracerper_um2 = 0.5  # Anzahl der Tracer teilchen pro um**2
+  ntracer = tracerper_um2  * xlength/micron * ylength/micron * if(ndims eq 3, ylength/micron, 1)
+
+  # Plasma Density
+  n0 = 1e19 / cc
+  densityramplength = 100 * micron
+  # Density down ramp for injection
+  ddrx = 120 * micron
+  ddrlength = 16 * micron
+  ddrdeltan = -2e+18 / cc
+  # Plasma frequenz
+  omegap = sqrt(n0 * qe^2 / epsilon0 / me)
+
+  # --- DRIVING LASER PULSE ---
+  # wavelength
+  las_lambda = 0.8 * micron
+  #las_omega not used for laser, but for calculating the crtical density at particle setup
+  las_omega = 2 * pi * c / las_lambda
+
+  # peak a0 for a linear pulse - for elliptical pulses this will be reduced appropriately
+  las_a0_lpequiv = 2
+
+  # laser polarisation angle (radians)- 0 is polarised in y dimension
+  # rotates anti-clockwise as viewed from the laser source
+  las_polangle = 0
+
+  # laser fwhm transverse spotsize in focus
+  las_fwhm = 6 * micron
+
+  # pulse duration (fwhm)
+  las_fwhmt = 20 * femto
+
+  #at las_focus_time: pulse maximum arrives at coordinate origin. make sure this is late enough for appropriate injection
+  las_focus_time = - grid_x_min / c + las_fwhmt * 2
+
+  # laser carrier envelope phase - 0 should mean cycle peak is at the envelope peak (still to be checked)
+  las_cep = 0
+  
+  # Moving Window
+  window_vx = c * sqrt(1 - omegap^2/las_omega^2)
+
+  #Laser coordinate System: Laser is travelling along z_las, r_las is its transversal direction.
+  #Focus is always at (0,0) in laser coordinate system. In case you want to move the laser focus or change the angle of incidence (in x, y, z coordinate system), apply the appropriate coordinate transformation here.
+  z_las = x
+  r_las = sqrt(y^2 + z^2)
+
+  # --- DERIVED CONSTANTS --- DO NOT TOUCH ---
+  # only change things here if you know what you are doing!
+
+  # conversion of fwhm to 1/e^2 radii
+  las_widtht = 0.849322 * las_fwhmt
+  las_width = 0.849322 * las_fwhm
+
+  # gaussian beam equations taken from http://en.wikipedia.org/wiki/Gaussian_beam
+  # rayleigh range
+  las_rayleigh = pi * las_width ^ 2 / las_lambda
+  # wave number
+  las_k = 2.0 * pi / las_lambda
+  # radius of curvature at the injection boundary
+  las_rc = z_las * (1 + (las_rayleigh / (z_las + 1e-20)) ^ 2)
+  # Phasefront shift (delay in space) due to non-infinite las_rc
+  las_rc_shift =  r_las ^ 2 / (2 * las_rc + 1e-20)
+  # radius of beam 
+  las_w = las_width * sqrt(1 + (z_las / las_rayleigh)^2 )
+  # gouy phase shift at the injection boundary
+  las_gouy = if(ndims eq 1,0,atan(z_las / las_rayleigh))
+
+  # laser intensity at focus calculated from the defined a0 value
+  las_intensity_focus = las_a0_lpequiv ^ 2 * 1.368167127e6 / las_lambda ^ 2
+
+end:constant
+
+
+begin:control
+  t_end = 100*femto
+  particle_tstart = 0 * femto
+
+  nx = xlength * cells_per_x
+  ny = ylength * cells_per_y
+  nz = ylength * cells_per_y
+  x_min = grid_x_min
+  x_max = x_min + xlength
+  y_min = grid_y_min
+  y_max = y_min + ylength
+  z_min = grid_z_min
+  z_max = z_min + ylength
+
+  #nprocx = 40
+  #nprocy = 2
+  dlb_threshold = 0.60
+  stdout_frequency = 10
+  print_constants = T
+  print_eta_string = T
+end:control
+
+begin:laser
+  # LASER 1
+  # laser block for primary laser pulse (more will be added later)
+  boundary = x_min
+  # intensity at the injection boundary
+  intensity_w_cm2 = (las_width / las_w) ^ (ndims-1) * las_intensity_focus
+  lambda = las_lambda
+  # phase profile required to add curved wavefronts in order to focus the beam
+  # Added pi / 2 so there will be a cosinus and not a sinus
+  phase = - las_k * z_las - las_k * las_rc_shift + las_gouy  - 2 * pi * c / las_lambda * las_focus_time + las_cep + pi / 2
+
+  pol_angle = las_polangle
+  #radial * temporal/longitudinal profiles
+  profile = gauss(r_las , 0, las_w) * gauss(time - las_rc_shift / c, las_focus_time + z_las /c, las_widtht)
+end:laser
+
+begin:species
+  name = electron
+  charge = -1
+  mass = 1
+  npart_per_cell = npart_per_cell_electron
+  density = if (x gt -densityramplength/2, n0*(x+(densityramplength/2))/densityramplength, 0)
+  density = if (x gt densityramplength/2, n0, density(electron))
+  density = if (x gt ddrx, n0 + ddrdeltan, density(electron))
+  density = if ((x gt ddrx-ddrlength/2) and (x lt ddrx+ddrlength/2), n0 + ddrdeltan * (x-ddrx+ddrlength/2)/ddrlength, density(electron))
+  density_min = 0.01 * n0
+  density_max = 2 * n0
+end:species
+
+begin:species
+  name = electront  # test particles
+  charge = -1
+  mass = 1
+  npart = ntracer
+  density = 1
+  tracer = T
+end:species
+
+begin:subset
+  name = testparticle
+  include_species:electront
+end:subset
+
+begin:window
+  move_window=T
+  window_v_x = window_vx
+  window_start_time = las_focus_time
+  bc_x_min_after_move = simple_outflow
+  bc_x_max_after_move = simple_outflow
+end:window
+
+begin:boundaries
+  bc_x_min = simple_laser
+  bc_x_max = simple_outflow
+  bc_y_min = periodic
+  bc_y_max = periodic
+  bc_z_min = periodic
+  bc_z_max = periodic
+end:boundaries
+
+begin:output_global
+   force_final_to_be_restartable = F
+end:output_global
+
+begin:output
+  name = testparticle
+  dt_snapshot = 1*femto
+  # Properties at particle positions
+  particles = single + testparticle
+  px = single + testparticle
+  py = single + testparticle
+  pz = single + testparticle
+  particle_weight = single + testparticle
+  id = single + testparticle
+  grid = single + always
+end:output
+
+begin:output
+  name = normal
+  #dump_at_times = las_focus_time-20*femto, las_focus_time, las_focus_time+20*femto
+  dt_snapshot = 5*femto
+  dump_final = T
+ 
+  # Properties at particle positions
+  particles = always + single
+  px = always + single
+  py = always + single 
+  pz = always + single
+  vx = never
+  vy = never
+  vz = never
+  charge = never
+  mass = never
+  particle_weight = always + single
+  id = always + single
+
+  # Properties on grid
+  grid = always + single
+  ex = always + single
+  ey = always + single
+  ez = never
+  bx = never
+  by = never
+  bz = always + single
+  jx = never
+  jy = never
+  jz = never
+  ekbar = never
+  ekflux = never
+  mass_density = never
+  charge_density = never
+  number_density = never
+  temperature = never
+  poynt_flux = never
+end:output
+
