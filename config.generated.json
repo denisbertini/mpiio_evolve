@@ -28,7 +28,7 @@
     "enabled": true,
     "runtime": "apptainer",
     "image": "images/current.sif",
-    "exec_opts": "--contain",
+    "exec_opts": "",
     "mpi_mode": "srun_direct"
   },
   "benchmark": {

@@ -65,13 +65,15 @@ container:
   enabled: true
   runtime: apptainer             # apptainer | singularity
   image: "images/current.sif"    # symlink refreshed by the build script
-  # Extra `exec` options. --contain keeps the container hermetic (no bind of
-  # the nonexistent /home). Filesystem visibility is handled by
-  # APPTAINER_BINDPATH in the job environment (= the whole deploy root,
-  # site-validated), NOT by a narrow --bind here, so the repo itself
-  # (benchmarks/ scripts) is visible inside the container too.
-  # The framework additionally injects `--home <state>/.fake_home` automatically.
-  exec_opts: "--contain"
+  # Extra `exec` options. NO --contain: with srun_direct (one container per
+  # rank) it would give every rank a PRIVATE /dev/shm, killing Open MPI's
+  # shared-memory intra-node transport (vader -> silent TCP fallback) and
+  # diverging from the production invocations. Missing-$HOME isolation is
+  # handled by the injected `--home <state>/.fake_home` (which also replaces
+  # the passwd-home auto-bind --contain's only other useful effect), and
+  # filesystem visibility by APPTAINER_BINDPATH in the job environment
+  # (= the whole deploy root, site-validated).
+  exec_opts: ""
   # srun_direct: Slurm launches one containerized rank per task via PMI(x).
   # Requires Slurm >= 23.02 with --mpi=pmix to match the image's PMIx 5.
   # Set cluster.extra_srun_args to "--mpi=pmix" accordingly.
