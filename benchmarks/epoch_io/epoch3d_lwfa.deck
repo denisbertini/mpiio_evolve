@@ -1,16 +1,11 @@
 begin:constant
-  # --- uncomment for debug: sim should run in <5min using 6 procs on nlopc46
-  #cells_per_x = 12 / micron
-  #cells_per_y = 8 / micron
-  #npart_per_cell_electron = 1
-
   # full parameters
   xlength = 60 * micron
   ylength = 30 * micron
   zlength = 30 * micron
-  cells_per_x = 18 / micron
-  cells_per_y = 7.5 / micron
-  cells_per_z = 7.5 / micron
+  cells_per_x = 12 / micron
+  cells_per_y = 8 / micron
+  cells_per_z = 8 / micron
   grid_x_min = - xlength + 10 * micron
   grid_y_min = -ylength/2
   grid_z_min = -ylength/2
