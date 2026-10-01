@@ -203,11 +203,14 @@ class SlurmLauncher:
         srun = f"srun {extra_srun_args} {command}".replace("  ", " ")
         if repetitions <= 1:
             return f"{srun}\nexit $?"
+        # MPIIO_EVOLVE_REP propagates through srun into every rank's
+        # environment; the wrapper uses it to give each rep its own data
+        # subdir, which makes concurrent-rank cleanup race-free.
         return (
             "worst_rc=0\n"
             f"for rep in $(seq 1 {repetitions}); do\n"
             '  echo "=== MPIIO_EVOLVE_REP ${rep} ==="\n'
-            f"  {srun}\n"
+            f"  MPIIO_EVOLVE_REP=${{rep}} {srun}\n"
             "  rc=$?\n"
             '  echo "=== MPIIO_EVOLVE_REP_END ${rep} rc=${rc} ==="\n'
             "  if [ $rc -gt $worst_rc ]; then worst_rc=$rc; fi\n"

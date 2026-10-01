@@ -26,6 +26,19 @@ DECK="${EPOCH_DECK:-epoch3d_lwfa.deck}"
 EPOCH_BIN="${EPOCH_BIN:-epoch3d_lstr}"
 RANK="${SLURM_PROCID:-0}"
 NTASKS="${SLURM_NTASKS:-1}"
+# In-job repetition token set by the launcher's srun loop; isolates every
+# rep into its own data subdir so concurrent ranks can never race on shared
+# cleanup (a late rank of rep k must not delete rep k+1 output/stamps).
+REP="${MPIIO_EVOLVE_REP:-1}"
+DATA_DIR="$DATA_DIR/rep$REP"
+
+# ---- RANK-AWARE BY CONSTRUCTION ---------------------------------------------
+# This wrapper runs ONCE PER MPI RANK (srun_direct: srun --mpi=pmix spawns
+# one apptainer exec per task; PMIx bootstraps epoch3d's MPI_COMM_WORLD via
+# MPI_Init -- no mpirun is needed or wanted inside the container).
+# Therefore the setup below is deliberately racy-safe: mkdir -p is
+# idempotent, the deck is read in place from the repo (never copied), and
+# each rank only ever removes its OWN stamp files.
 
 if ! command -v "$EPOCH_BIN" >/dev/null 2>&1; then
     echo "epoch_io: benchmark binary '$EPOCH_BIN' not found in container" >&2
@@ -34,13 +47,15 @@ fi
 
 mkdir -p "$DATA_DIR" || exit 2
 cd "$DATA_DIR" || exit 2
-rm -f .rank_done.* .rank_rc.* 0*.sdf
-cp "$BENCH_DIR/$DECK" ./ || { echo "epoch_io: deck $BENCH_DIR/$DECK missing" >&2; exit 2; }
+rm -f ".rank_done.$RANK" ".rank_rc.$RANK" "$(printf '%04d.sdf' "$RANK")" 2>/dev/null || true
+DECK_PATH="$BENCH_DIR/$DECK"
+[ -f "$DECK_PATH" ] || { echo "epoch_io: deck $DECK_PATH missing" >&2; exit 2; }
 
 # ---- every rank runs the simulation (EPOCH is one MPI rank per process) ----
+# Deck is read in place from the repo; SDF output lands in cwd ($DATA_DIR).
 epoch_log="epoch_stdout_rank${RANK}.log"
 start_ns=$(date +%s%N)
-"$EPOCH_BIN" "$DECK" > "$epoch_log" 2>&1
+"$EPOCH_BIN" "$DECK_PATH" > "$epoch_log" 2>&1
 rc=$?
 echo "$rc" > ".rank_rc.$RANK"
 touch ".rank_done.$RANK"
