@@ -209,8 +209,10 @@ if command -v sbatch >/dev/null 2>&1; then
         && ok "partition '$PARTITION' exists ($(sinfo -p $PARTITION -h -o '%D nodes %T' 2>/dev/null | head -1))" \
         || bad "partition '$PARTITION' not visible to sinfo"
     if [ -n "$CONSTRAINT" ]; then
-        idle=$(sinfo -N -p "$PARTITION" -h -o "%e %t" 2>/dev/null | awk -v c="$CONSTRAINT" '$1 ~ c && $2 == "idle"' | wc -l)
-        tot=$(scontrol show nodes 2>/dev/null | awk '/AvailFeatures/ && /'"$CONSTRAINT"'/ {n++} END{print n+0}')
+        # Slurm >= 23 prints "AvailableFeatures=", older "AvailFeatures" --
+        # match both (a bare /AvailFeatures/ silently misses the new field).
+        tot=$(scontrol show nodes -o 2>/dev/null | awk -v c="$CONSTRAINT" '/Avail(able)?Features/ && $0 ~ ("[," c "[,]") {n++} END{print n+0}')
+        idle=$(sinfo -N -p "$PARTITION" -h -o "%e %t" 2>/dev/null | awk -v c="$CONSTRAINT" '$1 ~ c && $2 ~ /^idle/' | wc -l)
         if [ "${tot:-0}" -gt 0 ]; then
             ok "nodes with feature '$CONSTRAINT': $tot total, $idle idle on $PARTITION"
             [ "${idle:-0}" -eq 0 ] && warn "0 idle $CONSTRAINT nodes now -- first submission will queue"
