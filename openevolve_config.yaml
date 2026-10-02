@@ -36,7 +36,9 @@ llm:
   retry_delay: 10
 
 evaluator:
-  timeout: 3300                 # 3 in-job reps (~15-18 min) + queue + margin
+  timeout: 7800                 # measured: 3 in-job reps ~50 min on virgo4;
+                                # must exceed evaluation_io._EVAL_TIMEOUT_S
+                                # (7200) so the client times out first
   max_retries: 1                # a failed eval scores 0; don't burn allocations
   cascade_evaluation: false     # every candidate gets the honest 3-rep measurement
   parallel_evaluations: 1       # serial first; raise to 2-3 once Lustre noise is known

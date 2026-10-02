@@ -44,8 +44,10 @@ cluster:
   tasks_per_node: 32
   cpus_per_task: 1
   mem_per_cpu: "4000M"
-  time_limit: "00:45:00"               # measured: ~4 min/run @ t_end=50fs;
-                                       # 3 in-job reps + startup + headroom
+  time_limit: "01:30:00"               # measured virgo4: 14:45 per 50fs rep on
+                                       # main/9654 (~3x slower than ccgpu per
+                                       # iteration) -> 3 in-job reps ~50 min
+                                       # + startup + headroom
   # Pin one CPU generation for measurement homogeneity: 'main' is mixed
   # EPYC 9654 (384c) / 9555 / 7713 (256c) -- letting candidates land on
   # different CPU types would bias fitness exactly like a bad hint.
