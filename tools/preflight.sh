@@ -18,6 +18,9 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 FAST=0
 [[ "${1:-}" == "--fast" ]] && FAST=1
 
+# Every external call gets a hard timeout; the script itself may never hang.
+T=$(command -v timeout || true)   # empty on exotic systems -> commands run bare
+
 if [ -t 1 ]; then
     G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m'
 else
@@ -59,11 +62,22 @@ command -v git >/dev/null 2>&1 && ok "git: $(git --version 2>/dev/null | head -1
 BR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 echo "$BR" | grep -qE "controller-launch|^main$" && ok "branch: $BR" \
                                                  || warn "branch '$BR' (expected feature/controller-launch or main)"
-git fetch -q origin 2>/dev/null \
-  && { BEHIND=$(git rev-list --count HEAD..@{upstream} 2>/dev/null || echo "?")
-       [ "$BEHIND" = "0" ] && ok "up to date with origin" \
-                           || warn "$BEHIND commits behind origin -- run: git pull"; } \
-  || warn "git fetch origin failed (offline login? fine for running, bad for pulling)"
+# github.com is firewalled from the virgo4 logins BY POLICY -- a fetch here
+# black-holes forever. Skip the freshness check for github remotes unless
+# MPIIO_GITHUB=1; sync the shared Lustre checkout from a login that CAN
+# reach github (e.g. a hydra login) instead.
+ORIGIN_URL=$(git config --get remote.origin.url 2>/dev/null)
+if [[ "$ORIGIN_URL" == *github* && "${MPIIO_GITHUB:-0}" != "1" ]]; then
+    HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
+    skip "origin freshness (github blocked from this login by policy; HEAD=$HEAD_SHA -- pull via a hydra login, Lustre is shared)"
+else
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10" \
+        ${T:+$T 20} git fetch -q origin 2>/dev/null \
+      && { BEHIND=$(git rev-list --count HEAD..@{upstream} 2>/dev/null || echo "?")
+           [ "$BEHIND" = "0" ] && ok "up to date with origin" \
+                               || warn "$BEHIND commits behind origin -- sync from a github-capable login"; } \
+      || warn "git fetch origin failed/timed out (offline login? fine for running)"
+fi
 
 # ------------------------------------------------------- 2. package network
 section "2. Python package network (bootstrap dependency)"
