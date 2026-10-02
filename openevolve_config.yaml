@@ -12,7 +12,7 @@
 # Launch:  ./tools/run_controller.sh openevolve_config.yaml
 # =============================================================================
 
-max_iterations: 40              # ~18 min/eval serial -> ~12 h overnight campaign
+max_iterations: 40              # POC: ~20-25 min/eval serial -> ~15 h campaign
 checkpoint_interval: 5
 log_level: "INFO"
 random_seed: 42
@@ -36,9 +36,9 @@ llm:
   retry_delay: 10
 
 evaluator:
-  timeout: 7800                 # measured: 3 in-job reps ~50 min on virgo4;
-                                # must exceed evaluation_io._EVAL_TIMEOUT_S
-                                # (7200) so the client times out first
+  timeout: 4200                 # POC: 3 reps ~20 min; > evaluation_io
+                                # _EVAL_TIMEOUT_S (3600) so the client
+                                # times out first
   max_retries: 1                # a failed eval scores 0; don't burn allocations
   cascade_evaluation: false     # every candidate gets the honest 3-rep measurement
   parallel_evaluations: 1       # serial first; raise to 2-3 once Lustre noise is known

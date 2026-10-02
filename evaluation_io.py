@@ -27,10 +27,10 @@ REPO = Path(__file__).resolve().parent
 _FITNESS_RE = re.compile(r"^FITNESS:\s*([0-9.eE+\-]+)", re.MULTILINE)
 _METRICS_RE = re.compile(r"^EVAL_METRICS\s+(\{.*\})", re.MULTILINE)
 
-# One evaluation = 3 in-job reps; measured on virgo4 main/9654: 14:45 per
-# rep at t_end=50 fs -> ~50 min of compute + queue + startup margin. Must
-# exceed cluster.time_limit so Slurm, not the client, remains the authority.
-_EVAL_TIMEOUT_S = 7200
+# POC deck (t_end=20 fs): ~6 min/rep on virgo4 -> 3 in-job reps ~20 min.
+# Must exceed cluster.time_limit so Slurm, not the client, remains the
+# authority on a running job.
+_EVAL_TIMEOUT_S = 3600
 
 
 def evaluate(program_path):

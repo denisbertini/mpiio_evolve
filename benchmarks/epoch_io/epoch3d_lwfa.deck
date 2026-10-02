@@ -84,7 +84,7 @@ end:constant
 
 
 begin:control
-  t_end = 50*femto   # halved for the benchmark: ~4 min/run on 32 ranks
+  t_end = 20*femto   # POC: ~6 min/rep on virgo4 32x9654; same dump cadence
   particle_tstart = 0 * femto
 
   nx = xlength * cells_per_x
