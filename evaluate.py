@@ -81,17 +81,49 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     If a YAML config fails to parse on this host and a sibling
     config.generated.json exists (see tools/compile_config.py), that is used
     automatically as the stdlib-only escape hatch.
+
+    Environment overrides for multi-cluster operation (this checkout can be
+    launched against any Slurm target without editing the config):
+
+        MPIIO_EVOLVE_PARTITION   -> cluster.partition   (e.g. main | nvidia_gpu)
+        MPIIO_EVOLVE_CONSTRAINT  -> cluster.constraint  ('' = drop constraint)
+        MPIIO_EVOLVE_ACCOUNT     -> cluster.account
+        MPIIO_EVOLVE_TIME_LIMIT  -> cluster.time_limit  (e.g. 02:00:00)
+
+    Defaults come from config.yaml, which targets the Virgo4 CPU cluster
+    ('main' + constraint '9654'); hydra/GPU runs would use, e.g.,
+    MPIIO_EVOLVE_PARTITION=nvidia_gpu MPIIO_EVOLVE_CONSTRAINT= ...
     """
     path = Path(path)
     try:
-        return _load_config_one(path)
+        cfg = _load_config_one(path)
     except Exception:
         generated = path.parent / "config.generated.json"
         if path.suffix.lower() in (".yaml", ".yml") and generated.exists():
             logger.warning("could not parse %s -- falling back to %s",
                            path, generated)
-            return _load_config_one(generated)
-        raise
+            cfg = _load_config_one(generated)
+        else:
+            raise
+    return _apply_cluster_env_overrides(cfg)
+
+
+def _apply_cluster_env_overrides(cfg: dict) -> dict:
+    """Apply MPIIO_EVOLVE_* environment overrides onto cfg['cluster']."""
+    cluster = cfg.setdefault("cluster", {})
+    part = os.environ.get("MPIIO_EVOLVE_PARTITION")
+    if part:
+        cluster["partition"] = part
+    if "MPIIO_EVOLVE_CONSTRAINT" in os.environ:
+        c = os.environ["MPIIO_EVOLVE_CONSTRAINT"].strip()
+        cluster["constraint"] = c or None
+    acct = os.environ.get("MPIIO_EVOLVE_ACCOUNT")
+    if acct:
+        cluster["account"] = acct
+    tl = os.environ.get("MPIIO_EVOLVE_TIME_LIMIT")
+    if tl:
+        cluster["time_limit"] = tl
+    return cfg
 
 
 def _load_config_one(path: Path) -> dict:
