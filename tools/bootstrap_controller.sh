@@ -126,7 +126,11 @@ if [[ "$WITH_OPENEVOLVE" == "1" ]]; then
     # openai...): through a proxy this takes several minutes. It MUST print
     # progress -- a silent multi-minute step looks exactly like a hang.
     echo "==> installing openevolve via pip (large dependency tree, be patient)..."
-    if "$PIP" install openevolve; then
+    # --progress-bar on: force the bar even though a script/non-tty would
+    # make pip auto-disable it. During the CPU-bound RESOLUTION phase there is
+    # no download to show a bar for; if it sits quiet, that is backtracking,
+    # not a hang (re-run with -v to watch it think).
+    if "$PIP" install --progress-bar on openevolve; then
         :
     else
         # Fallback to GitHub -- but github is firewalled from cluster logins,
