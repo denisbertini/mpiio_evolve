@@ -154,6 +154,32 @@ def _norm_hint(value: Any) -> str:
     return str(value)
 
 
+def validate_hint_values(hints: Mapping[str, str],
+                         space: Optional[Mapping[str, Any]],
+                         section: str) -> None:
+    """Enforce declared search-space values for engine hints.
+
+    Keys DECLARED in the search space must take one of its listed values
+    (compared after the same _norm_hint normalization applied to the
+    candidate). This turns search_space.romio/ompio from prompt folklore
+    into a hard guardrail: a candidate stepping on a site-banned value
+    (e.g. romio_ds_write=disable next to collective buffering) is refused
+    with explanatory feedback BEFORE burning cluster minutes. Keys NOT in
+    the space are left to the engine whitelist (dropped with a warning).
+    """
+    if not space:
+        return
+    for key, value in hints.items():
+        options = space.get(key)
+        if options is None:
+            continue
+        allowed = [_norm_hint(o) for o in options]
+        if value not in allowed:
+            raise ValueError(
+                f"{section}.{key}={value!r} is outside the declared search "
+                f"space {allowed}")
+
+
 # ---------------------------------------------------------------------------
 # Lustre configurator
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@
     "tasks_per_node": 32,
     "cpus_per_task": 1,
     "mem_per_cpu": "2000M",
-    "time_limit": "00:45:00",
+    "time_limit": "00:25:00",
     "constraint": null,
     "extra_sbatch": [],
     "extra_srun_args": "--mpi=pmix --export=ALL",
@@ -95,34 +95,11 @@
       ],
       "romio_ds_write": [
         "automatic",
-        "enable",
-        "disable"
-      ],
-      "striping_count": [
-        null,
-        1,
-        2,
-        4,
-        8,
-        16,
-        32,
-        56
-      ],
-      "striping_unit": [
-        null,
-        "64K",
-        "1M",
-        "4M",
-        "8M"
+        "enable"
       ],
       "no_io_anchors": [
         null,
         true
-      ],
-      "direct_io": [
-        null,
-        "enable",
-        "disable"
       ]
     },
     "ompio": {

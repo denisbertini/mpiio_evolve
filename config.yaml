@@ -50,9 +50,13 @@ cluster:
   mem_per_cpu: "2000M"                 # Orion main: MaxMemPerCPU=2000 (191G/96c).
                                        # 32 ranks x 2G = 64G -- EPOCH uses a
                                        # small fraction; also fine on Virgo4.
-  time_limit: "00:45:00"               # measured Orion: 13.5 min for 20 fs
-                                       # (104 iters) -> ~7 min/rep at 10 fs
-                                       # -> 3 in-job reps ~25 min + margin
+  time_limit: "00:25:00"               # damage cap: healthy 3-rep eval ~15 min
+                                       # (10 fs reps ~4 min each on Orion); a
+                                       # catastrophically slow candidate is
+                                       # SIGKILLed at 25 min -> partial/zero
+                                       # SDF bytes -> near-zero fitness ->
+                                       # selection deletes that lineage.
+                                       # Worst case per mutant: 25 min.
                                        # (adapter 3600 s / evaluator 4200 s
                                        # still exceed it -- Slurm stays the
                                        # authority on live jobs)
@@ -140,18 +144,23 @@ search_space:
     stripe_size:  ["1M", "4M", "8M", "16M", "32M"]
 
   romio:
-    # Keys land in the ROMIO text hints file (format: key=value per line).
-    # Reference: ROMIO README / MPICH internal hints documentation.
+    # Keys land in the ROMIO text hints file (whitespace 'key value' pairs,
+    # delivered via ROMIO_HINTS). Values here are HARD-VALIDATED before
+    # submission (infrastructure.validate_hint_values).
     romio_cb_read:   ["automatic", "enable", "disable"]
     romio_cb_write:  ["automatic", "enable", "disable"]
     cb_nodes:        [1, 2, 4, 8, 16, 32]
     cb_buffer_size:  ["131072", "262144", "1M", "4M", "8M"]
     romio_ds_read:   ["automatic", "enable", "disable"]
-    romio_ds_write:  ["automatic", "enable", "disable"]
-    striping_count:  [null, 1, 2, 4, 8, 16, 32, 56]   # null = inherit Lustre layout
-    striping_unit:   [null, "64K", "1M", "4M", "8M"]  # null = inherit Lustre layout
+    # 'disable' REMOVED from ds_write values: site-measured poison when
+    # combined with collective buffering (aggregator read-modify-write
+    # storms, hours-vs-minutes). The optimizer must never see it.
+    romio_ds_write:  ["automatic", "enable"]
     no_io_anchors:   [null, true]
-    direct_io:       [null, "enable", "disable"]
+    # striping_count / striping_unit / direct_io intentionally absent:
+    # this ROMIO sees Lustre as UFS, so they parse but never execute --
+    # dead keys would only dilute the search. Striping lives in lustre.*
+    # (lfs setstripe), which works.
 
   ompio:
     # Keys become OMPI_MCA_io_ompio_<key> environment variables (Open MPI 4.x).

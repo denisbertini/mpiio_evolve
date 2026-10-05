@@ -49,6 +49,7 @@ from infrastructure import (
     LustreConfigurator,
     build_job_environment,
     container_prefix,
+    validate_hint_values,
     write_romio_hints,
     ROMIO_HINTS_FILE,
     ensure_inside,
@@ -350,6 +351,11 @@ def evaluate(candidate: Mapping[str, Any],
         engine = resolve_engine(cfg, cand, probe_prefix)
         io_cfg = IoConfig.from_candidate(cand, engine)
         io_cfg.stripe.validate(cfg["search_space"]["lustre"])
+        # Hard guardrail on engine hints (was prompt-only; poison combos
+        # like ds_write=disable+cb must be refused BEFORE cluster minutes).
+        _ss = cfg.get("search_space", {})
+        validate_hint_values(io_cfg.romio_hints, _ss.get("romio"), "romio")
+        validate_hint_values(io_cfg.ompio_mca, _ss.get("ompio"), "ompio")
 
         # -- 2. Lustre layout ---------------------------------------------------
         lustre = LustreConfigurator(dry_run=simulate)

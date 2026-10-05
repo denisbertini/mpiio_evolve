@@ -73,7 +73,11 @@ prompt:
 
     Fitness = aggregate SDF write bandwidth (GiB/s), measured as the MEAN of
     3 repetitions inside one allocation; SEM error bars appear in the
-    feedback. Lustre is shared: differences smaller than the SEM are noise,
+    feedback. Values outside the declared search space are REJECTED before
+    submission (zero fitness + explanatory feedback); a run that exceeds the
+    25-minute wall limit is killed and scores on its partial output -- so a
+    catastrophically slow candidate costs the campaign at most one
+    evaluation. Lustre is shared: differences smaller than the SEM are noise,
     do not chase them. Physical intuition that transfers: too many
     aggregators (cb_nodes) add RPC overhead, too few bottleneck the big
     collective stream; stripe_count should match what a single large
