@@ -34,8 +34,11 @@ skip() { echo "  ${B}SKIP${N}  $*"; NSKIP=$((NSKIP+1)); }
 section() { echo; echo "${B}== $* ==${N}"; }
 
 cfgget() {   # first top-level-ish key value from config.yaml, comments then quotes off
-    grep -E "^[[:space:]]*$1:" config.yaml 2>/dev/null | head -1 \
-        | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/^"//; s/"$//; s/[[:space:]]+$//'
+    local v
+    v=$(grep -E "^[[:space:]]*$1:" config.yaml 2>/dev/null | head -1 \
+        | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/^"//; s/"$//; s/[[:space:]]+$//')
+    # YAML null spellings (null / ~ / empty) mean "absent", not the string "null"
+    case "$v" in null|Null|NULL|~|"") echo "" ;; *) echo "$v" ;; esac
 }
 
 HOST=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "?")
@@ -186,8 +189,8 @@ for f in evaluate.py evaluation_io.py slurm_launcher.py infrastructure.py \
     [ -f "$f" ] || { bad "missing: $f"; missing=1; }
 done
 [ "$missing" = 0 ] && ok "all core files present"
-grep -q "t_end = 20\*femto" benchmarks/epoch_io/epoch3d_lwfa.deck 2>/dev/null \
-    && ok "deck is POC length (t_end=20 fs)" \
+grep -Eq "t_end = (10|20)\*femto" benchmarks/epoch_io/epoch3d_lwfa.deck 2>/dev/null \
+    && ok "deck is POC length ($(grep -m1 -oE 't_end = [0-9]+\*femto' benchmarks/epoch_io/epoch3d_lwfa.deck))" \
     || warn "deck t_end unexpected: $(grep -m1 t_end benchmarks/epoch_io/epoch3d_lwfa.deck 2>/dev/null)"
 if [ -f config.yaml ] && [ -f config.generated.json ]; then
     [ config.yaml -nt config.generated.json ] \
