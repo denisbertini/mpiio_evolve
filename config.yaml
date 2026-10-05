@@ -50,8 +50,9 @@ cluster:
   mem_per_cpu: "2000M"                 # Orion main: MaxMemPerCPU=2000 (191G/96c).
                                        # 32 ranks x 2G = 64G -- EPOCH uses a
                                        # small fraction; also fine on Virgo4.
-  time_limit: "00:30:00"               # POC t_end=10fs: 3 in-job reps ~12 min
-                                       # on idle Orion + startup + margin.
+  time_limit: "00:45:00"               # measured Orion: 13.5 min for 20 fs
+                                       # (104 iters) -> ~7 min/rep at 10 fs
+                                       # -> 3 in-job reps ~25 min + margin
                                        # (adapter 3600 s / evaluator 4200 s
                                        # still exceed it -- Slurm stays the
                                        # authority on live jobs)

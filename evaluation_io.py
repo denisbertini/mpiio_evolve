@@ -27,8 +27,8 @@ REPO = Path(__file__).resolve().parent
 _FITNESS_RE = re.compile(r"^FITNESS:\s*([0-9.eE+\-]+)", re.MULTILINE)
 _METRICS_RE = re.compile(r"^EVAL_METRICS\s+(\{.*\})", re.MULTILINE)
 
-# POC deck (t_end=10 fs): ~1 min sim/rep on idle Orion gold6248r -> 3
-# in-job reps ~12 min incl. per-rep container/MPI startup.
+# POC deck (t_end=10 fs): measured Orion ~13.5 min per 20 fs -> ~7 min/rep
+# at 10 fs; 3 in-job reps ~25 min + queue.
 # Must exceed cluster.time_limit so Slurm, not the client, remains the
 # authority on a running job.
 _EVAL_TIMEOUT_S = 3600

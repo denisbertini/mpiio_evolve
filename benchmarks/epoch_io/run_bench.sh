@@ -39,4 +39,8 @@ command -v "$EPOCH_BIN" >/dev/null 2>&1 || {
 # input.deck -- symlinked by setup_run.sh before srun. Answer the prompt
 # exactly like the production run_file.sh:
 echo "." | "$EPOCH_BIN"
-exit $?
+rc=$?
+# Breadcrumb for zero-measurement forensics (cheap; 32 short blocks per rep):
+echo "run_bench[rank ${SLURM_PROCID:-?}]: rc=$rc cwd=$(pwd)"
+find . -maxdepth 2 -type f -name '*.sdf' -printf '  %s\t%p\n' 2>/dev/null | head -4
+exit $rc

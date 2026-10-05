@@ -486,7 +486,11 @@ def evaluate(candidate: Mapping[str, Any],
         (run_dir / "feedback.txt").write_text(feedback, encoding="utf-8")
 
     # -- 7. cleanup ------------------------------------------------------------
-    _cleanup(run_dir, ws, cfg, keep_data=bool(ws_cfg.get("keep_data", False)))
+    # Zero-sample runs KEEP the data dir: if we could not measure what
+    # happened we must not destroy the evidence (a past inverted-test bug
+    # zeroed fitness on a perfectly good run and cleanup hid the proof).
+    _cleanup(run_dir, ws, cfg,
+             keep_data=bool(ws_cfg.get("keep_data", False)) or not n_w)
 
     sem_w = (w_std / (n_w ** 0.5)) if (w_std and n_w > 1) else 0.0
     sem_r = (r_std / (n_r ** 0.5)) if (r_std and n_r > 1) else 0.0

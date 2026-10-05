@@ -21,6 +21,8 @@ mkdir -p "$RUN_DIR" || exit 2
 DECK_PATH="$BENCH_DIR/$DECK"
 [ -f "$DECK_PATH" ] || { echo "setup_run: deck $DECK_PATH missing" >&2; exit 2; }
 
-# Single writer (batch shell, before any rank starts) -> plain -f is safe.
-ln -sf "$DECK_PATH" "$RUN_DIR/input.deck"
+# Copy, do NOT symlink: EPOCH has been observed anchoring its SDF output at
+# the deck's REAL path, and a symlink into the repo would scatter diagnostics
+# into the checkout (and away from measure.sh). A copy keeps realpath == repdir.
+cp -f "$DECK_PATH" "$RUN_DIR/input.deck"
 echo "setup_run: rep $REP ready at $RUN_DIR (deck -> $DECK_PATH)"
