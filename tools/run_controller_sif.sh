@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# =============================================================================
+# mpiio_evolve -- run the controller CONFINED inside the controller SIF.
+#
+# The image (container/controller.def -> images/controller.sif) carries
+# OpenEvolve + a version-matched Slurm client + lfs.  With --contain the
+# container sees ONLY:
+#   * ppio_tune          rw   same path  (all mutable state)
+#   * the repo           ro   same path  (code cannot modify itself)
+#   * /etc/slurm         ro              (client needs slurmctld address)
+#   * munge socket       auto-bound by apptainer.conf 'mungepath' -- the
+#                        same mechanism that let the old dask image submit.
+# $HOME and the rest of /lustre are INVISIBLE.  Submitted benchmark jobs
+# run outside this container on compute nodes and are unaffected.
+#
+# Usage:
+#   tmux new -s evolve
+#   ./tools/run_controller_sif.sh [openevolve_config.yaml]
+#
+# Build the image first (github/internet build node or via proxy):
+#   sudo http_proxy=$PROXY https_proxy=$PROXY \
+#     apptainer build images/controller.sif container/controller.def
+# =============================================================================
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SIF="${MPIIO_EVOLVE_CONTROLLER_SIF:-$REPO_ROOT/images/controller.sif}"
+CFG="${1:-openevolve_config.yaml}"
+
+if [[ ! -f "$SIF" ]]; then
+    echo "controller SIF not found: $SIF" >&2
+    echo "  build:  sudo apptainer build images/controller.sif container/controller.def" >&2
+    echo "  (check the Slurm VERSION= in the .def against 'sbatch --version' first)" >&2
+    exit 1
+fi
+
+STATE_ROOT="${MPIIO_EVOLVE_DEPLOY_ROOT:-/lustre/rz/dbertini2}"
+STATE="$STATE_ROOT/ppio_tune"
+
+# Writable CWD outside the read-only repo: OpenEvolve's default
+# ./openevolve_output (checkpoints, logs) lands HERE, not on :ro code.
+RUNDIR="$STATE/controller_run"
+mkdir -p "$RUNDIR" "$STATE/.fake_home" "$STATE/tmp"
+
+# LLM endpoint (identical semantics to the bare-metal run_controller.sh).
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}ccdev0022.hpc.gsi.de,localhost,127.0.0.1"
+export no_proxy="$NO_PROXY"
+export OPENAI_API_BASE="${OPENAI_API_BASE:-http://ccdev0022.hpc.gsi.de:8781/v1}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-unused}"
+
+# One state directory per launcher/user under the deployment root.
+export MPIIO_EVOLVE_STATE_DIR="${MPIIO_EVOLVE_STATE_DIR:-${USER:-default}}"
+
+# Apptainer plumbing: same lessons as the benchmark launcher (no $HOME).
+export APPTAINER_CONFIGDIR="/tmp/${USER}"
+export APPTAINER_TMPDIR="/tmp/${USER}"
+export APPTAINER_HOME="$STATE/.fake_home"
+mkdir -p "$APPTAINER_CONFIGDIR"
+export TMPDIR="$STATE/tmp"
+
+# ---- the confinement wall: state rw, code ro, slurm conf.  Nothing else. ----
+export APPTAINER_BINDPATH="$STATE,$REPO_ROOT:${REPO_ROOT}:ro,/etc/slurm:/etc/slurm:ro"
+
+echo "mpiio_evolve CONTAINER controller"
+echo "  sif   : $SIF"
+echo "  state : $STATE (dir: $MPIIO_EVOLVE_STATE_DIR)"
+echo "  cwd   : $RUNDIR   (openevolve_output lands here)"
+echo "  llm   : $OPENAI_API_BASE"
+echo "  binds : $APPTAINER_BINDPATH"
+
+cd "$RUNDIR"
+exec nice -n 5 apptainer exec --contain "$SIF" \
+    python "$REPO_ROOT/tools/launch_evolution.py" "$CFG"
