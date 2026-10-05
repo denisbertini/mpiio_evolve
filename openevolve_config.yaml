@@ -81,4 +81,14 @@ prompt:
     stripe_size >= the per-aggregator chunk (cb_buffer_size); data-sieving
     hurts when per-rank strided extents are large and contiguous.
 
+    Site-verified facts (do not re-derive): ROMIO on this stack reports
+    filesystem_type=UFS (its Lustre auto-detection misses this client), so
+    romio's own striping_* and direct_io hints are PARSED BUT INERT -- all
+    Lustre striping must come through lustre.striping_count/stripe_size,
+    which is applied with lfs setstripe and DOES work. The effective knobs
+    are the cb_* family: factory defaults are romio_cb_write=automatic with
+    cb_config_list *:1 / cb_nodes 1, i.e. collective buffering is
+    essentially OFF -- turning it on and sizing cb_nodes/cb_buffer_size is
+    the primary lever to explore.
+
     Output ONLY the complete candidate JSON. No prose, no markdown fences.

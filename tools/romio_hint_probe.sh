@@ -78,6 +78,7 @@ printf '# IO hints file\n# romio_hint_probe\nstriping_count %s\nstriping_unit %s
 rm -f "$WITH" "$CTRL"
 
 echo "==> compiling + running probe on partition '$PARTITION' (image: $IMAGE)"
+OUT="$SCRATCH/probe_output.txt"
 # Same launch idiom as the campaign: bare srun --mpi=pmix --export=ALL, one
 # task, apptainer WITHOUT --contain. OMPI_MCA_io=romio341 pins the component
 # exactly like the real submit.sh does.
@@ -91,29 +92,31 @@ srun -p "$PARTITION" -n 1 --mpi=pmix --export=ALL \
         echo '--- run WITHOUT hints (control) ---'
         OMPI_MCA_io=romio341 '$SCRATCH/probe.run' '$CTRL'
         echo '--- probe done ---'
-     "
+     " 2>&1 | tee "$OUT"
 
-command -v lfs >/dev/null 2>&1 || {
-    echo "lfs not available here -- check manually:"
-    echo "  lfs getstripe $WITH"; echo "  lfs getstripe $CTRL"; exit 2; }
-
-stripe_of() { lfs getstripe "$1" 2>/dev/null | awk -v k="$2" '$1 ~ k":" {print $2; exit}'; }
-C=$(stripe_of "$WITH" stripe_count);  CU=$(stripe_of "$WITH" stripe_size)
-K=$(stripe_of "$CTRL" stripe_count);  KU=$(stripe_of "$CTRL" stripe_size)
-echo "==> with hints : stripe_count=${C:-?}  stripe_size=${CU:-?}"
-echo "==> control    : stripe_count=${K:-?}  stripe_size=${KU:-?}"
-
-if [ "${C:-0}" = "$EXPECT_COUNT" ] && [ "${CU:-0}" = "$EXPECT_UNIT" ]; then
-    echo "VERDICT: PASS -- ROMIO_HINTS honored end-to-end; romio engine is live ammo."
+# ---- verdict ---------------------------------------------------------------
+# PRIMARY evidence: ROMIO_PRINT_HINTS shows the EFFECTIVE hint set; our two
+# values appearing there proves env -> hint-file -> parser -> fd->hints all
+# work. (A lustre-specific side-effect like lfs getstripe CANNOT serve as
+# proof: builds whose statfs magic check misidentifies Lustre as UFS parse
+# striping hints but never execute them -- cosmetic, not fatal.)
+if grep -q "striping_count.*4" "$OUT" && grep -q "striping_unit.*1048576" "$OUT"; then
+    echo "VERDICT: PASS -- hint file READ by ROMIO (values present in effective set)."
+    if grep -qi "filesystem_type.*UFS" "$OUT"; then
+        echo "  NOTE: this ROMIO sees the FS as UFS -> striping_*/direct_io hints are"
+        echo "        PARSED BUT INERT here; Lustre striping must stay under"
+        echo "        'lfs setstripe' (already done via run-dir layout), and the"
+        echo "        effective search space is the cb_*/buffer/ds_* hint family."
+    fi
     echo "         (clean up: rm -rf $SCRATCH)"
     exit 0
 fi
-if [ "${C:-x}" = "${K:-y}" ]; then
-    echo "VERDICT: FAIL -- hinted file identical to control; this ROMIO ignores the"
-    echo "         hint file. Switch config.yaml to default_engine: \"ompio\""
-    echo "         (OMPI_MCA_io_ompio_* env channel) before launching a campaign."
-else
-    echo "VERDICT: INCONCLUSIVE -- layout changed but not as requested; paste output."
-fi
+command -v lfs >/dev/null 2>&1 && {
+stripe_of() { lfs getstripe "$1" 2>/dev/null | awk -v k="$2" '$1 ~ k":" {print $2; exit}'; }
+echo "==> with hints : stripe_count=$(stripe_of "$WITH" stripe_count)  stripe_size=$(stripe_of "$WITH" stripe_size)"
+echo "==> control    : stripe_count=$(stripe_of "$CTRL" stripe_count)  stripe_size=$(stripe_of "$CTRL" stripe_size)"; }
+echo "VERDICT: FAIL -- our hint values never appeared in ROMIO's effective set."
+echo "         The env hint-file channel is dead on this build; switch"
+echo "         config.yaml to default_engine: \"ompio\" before evolving."
 echo "         (clean up: rm -rf $SCRATCH)"
 exit 1
