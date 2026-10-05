@@ -47,8 +47,11 @@ cluster:
   mem_per_cpu: "2000M"                 # Orion main: MaxMemPerCPU=2000 (191G/96c).
                                        # 32 ranks x 2G = 64G -- EPOCH uses a
                                        # small fraction; also fine on Virgo4.
-  time_limit: "00:45:00"               # POC t_end=20fs: ~2-6 min/rep
-                                       # -> 3 in-job reps + margin
+  time_limit: "00:30:00"               # POC t_end=10fs: 3 in-job reps ~12 min
+                                       # on idle Orion + startup + margin.
+                                       # (adapter 3600 s / evaluator 4200 s
+                                       # still exceed it -- Slurm stays the
+                                       # authority on live jobs)
   # CPU-generation pinning. Orion's main is homogeneous gold6248r -> none
   # needed. For a Virgo4 campaign re-enable per-run (same checkout):
   #   MPIIO_EVOLVE_CONSTRAINT=9654   (its 'main' mixes EPYC 9654/9555/7713;

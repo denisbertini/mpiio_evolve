@@ -84,7 +84,11 @@ end:constant
 
 
 begin:control
-  t_end = 20*femto   # POC: ~6 min/rep on virgo4 32x9654; same dump cadence
+  t_end = 10*femto   # POC: ~1 min sim on idle gold6248r (Orion); 10 tracer
+                     # dumps + 2 field dumps + final -> same collective I/O
+                     # character, half the wall. Do not cut further: below
+                     # ~10 fs the fixed startup overhead per rep dominates
+                     # the write-time signal.
   particle_tstart = 0 * femto
 
   nx = xlength * cells_per_x

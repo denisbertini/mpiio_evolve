@@ -12,7 +12,9 @@
 # Launch:  ./tools/run_controller.sh openevolve_config.yaml
 # =============================================================================
 
-max_iterations: 40              # POC: ~20-25 min/eval serial -> ~15 h campaign
+max_iterations: 40              # ~10-12 min/eval on idle Orion -> 40 gens
+                               # comfortably overnight; stop any time
+                               # (checkpointed population)
 checkpoint_interval: 5
 log_level: "INFO"
 random_seed: 42
