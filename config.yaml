@@ -44,7 +44,9 @@ cluster:
   nodes: 1
   tasks_per_node: 32
   cpus_per_task: 1
-  mem_per_cpu: "4000M"
+  mem_per_cpu: "2000M"                 # Orion main: MaxMemPerCPU=2000 (191G/96c).
+                                       # 32 ranks x 2G = 64G -- EPOCH uses a
+                                       # small fraction; also fine on Virgo4.
   time_limit: "00:45:00"               # POC t_end=20fs: ~2-6 min/rep
                                        # -> 3 in-job reps + margin
   # CPU-generation pinning. Orion's main is homogeneous gold6248r -> none
