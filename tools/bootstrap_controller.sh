@@ -122,8 +122,25 @@ MPIIO_EVOLVE_STATE_DIR="$STATE_DIR" \
     --dry-run 2>/dev/null | tail -n1 | sed 's/^/  [ok] evaluator  : /'
 
 if [[ "$WITH_OPENEVOLVE" == "1" ]]; then
-    "$PIP" install openevolve 2>/dev/null \
-        || "$PIP" install "git+https://github.com/codelion/openevolve.git"
+    # OpenEvolve pulls a large dependency tree (numpy/pandas/matplotlib/
+    # openai...): through a proxy this takes several minutes. It MUST print
+    # progress -- a silent multi-minute step looks exactly like a hang.
+    echo "==> installing openevolve via pip (large dependency tree, be patient)..."
+    if "$PIP" install openevolve; then
+        :
+    else
+        # Fallback to GitHub -- but github is firewalled from cluster logins,
+        # so bound it: batch mode (no credential prompt) + hard timeout, and
+        # fail loudly instead of black-holing on a dropped SYN.
+        echo "    pip/PyPI install failed -- trying GitHub (needs github access; 3 min cap)..."
+        GIT_TERMINAL_PROMPT=0 ${TMO:-timeout} 180 "$PIP" install \
+            "git+https://github.com/codelion/openevolve.git" \
+            || { echo "ERROR: openevolve install FAILED (see pip output above)." >&2
+                 echo "       Likely: PyPI wheel unavailable AND github blocked" >&2
+                 echo "       from this login. Bootstrap from a github-capable" >&2
+                 echo "       login (shared Lustre venv) or ask for a PyPI mirror." >&2
+                 exit 1; }
+    fi
     echo "  [ok] openevolve : $("$ENV_DIR/bin/openevolve" --version 2>/dev/null || echo installed)"
 fi
 
