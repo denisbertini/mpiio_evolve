@@ -89,6 +89,10 @@ prompt:
     are the cb_* family: factory defaults are romio_cb_write=automatic with
     cb_config_list *:1 / cb_nodes 1, i.e. collective buffering is
     essentially OFF -- turning it on and sizing cb_nodes/cb_buffer_size is
-    the primary lever to explore.
+    the primary lever to explore. POISON COMBO (site-measured,
+    catastrophic): romio_cb_write=enable together with
+    romio_ds_write=disable forces aggregators into read-modify-write of
+    partially-filled blocks -- never disable data sieving while collective
+    buffering is on.
 
     Output ONLY the complete candidate JSON. No prose, no markdown fences.
