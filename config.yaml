@@ -35,10 +35,13 @@ workspace:
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------
-  # Current target: ORION test pool (ccdev[0001-0011], gold6248r, 96c) --
-  # empty cluster, no neighbor contention on Lustre bandwidth. The LLM
-  # endpoint (ccdev0022:8781) lives on the same fabric.
-  partition: "main"
+  # Current target: ORION test pool on 'long' (ccdev[0012-0019]). NOT 'main':
+  # main's nodelist ccdev[0001-0011] includes the LOGIN nodes ccdev0001/2,
+  # and the evolution controller runs there -- a benchmark job scheduled
+  # onto a login node would contend with (and eventually be starved by /
+  # starve) the OpenEvolve process itself. 'long' is pure compute, idle,
+  # 7-day limit, 96c/191G nodes (ccdev0012-19).
+  partition: "long"
   account: "rz"          # TODO: your Slurm account/allocation
   qos: null                            # optional QoS
   nodes: 1

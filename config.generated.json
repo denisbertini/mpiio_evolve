@@ -9,7 +9,7 @@
     "lustre_strict": true
   },
   "cluster": {
-    "partition": "main",
+    "partition": "long",
     "account": "rz",
     "qos": null,
     "nodes": 1,
