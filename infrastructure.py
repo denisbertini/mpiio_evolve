@@ -495,11 +495,28 @@ def build_job_environment(
     return env
 
 
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")   # POSIX env-var name
+
+
 def render_env_exports(env: Mapping[str, str]) -> str:
-    """Render an env dict as ordered ``export K='V'`` shell lines."""
+    """Render an env dict as ordered ``export K='V'`` shell lines.
+
+    SECURITY chokepoint: this is the only place candidate-influenced values
+    (extra_env, MCA vars) become shell text, executed by sbatch on a compute
+    node where Lustre is mounted WRITABLE. Values are POSIX single-quote
+    escaped; KEYS are validated as strict POSIX identifiers -- a key like
+    ``I_$(rm -rf ...)`` or one containing a newline would otherwise execute
+    the substitution / inject a new command line. A malformed key here is a
+    hard error (not silently dropped): it signals a filter bug upstream and
+    must never be papered over on a write-capable node.
+    """
     lines = []
     for key in sorted(env):
+        if not _ENV_KEY_RE.match(key):
+            raise ValueError(f"refusing to export env var with unsafe name: {key!r}")
         value = str(env[key]).replace("'", "'\\''")  # POSIX single-quote escape
+        if "\x00" in value:
+            raise ValueError(f"env var {key} contains NUL byte")
         lines.append(f"export {key}='{value}'")
     return "\n".join(lines)
 
