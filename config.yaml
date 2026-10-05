@@ -35,8 +35,9 @@ workspace:
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------
-  # Virgo4 CPU cluster: the benchmark is pure CPU+MPI+Lustre -- no reason to
-  # squat on GPU nodes. (The GPU cluster hosts only the LLM endpoint.)
+  # Current target: ORION test pool (ccdev[0001-0011], gold6248r, 96c) --
+  # empty cluster, no neighbor contention on Lustre bandwidth. The LLM
+  # endpoint (ccdev0022:8781) lives on the same fabric.
   partition: "main"
   account: "rz"          # TODO: your Slurm account/allocation
   qos: null                            # optional QoS
@@ -44,12 +45,13 @@ cluster:
   tasks_per_node: 32
   cpus_per_task: 1
   mem_per_cpu: "4000M"
-  time_limit: "00:45:00"               # POC t_end=20fs: ~6 min/rep on virgo4
-                                       # -> 3 in-job reps ~20 min + margin
-  # Pin one CPU generation for measurement homogeneity: 'main' is mixed
-  # EPYC 9654 (384c) / 9555 / 7713 (256c) -- letting candidates land on
-  # different CPU types would bias fitness exactly like a bad hint.
-  constraint: "9654"
+  time_limit: "00:45:00"               # POC t_end=20fs: ~2-6 min/rep
+                                       # -> 3 in-job reps + margin
+  # CPU-generation pinning. Orion's main is homogeneous gold6248r -> none
+  # needed. For a Virgo4 campaign re-enable per-run (same checkout):
+  #   MPIIO_EVOLVE_CONSTRAINT=9654   (its 'main' mixes EPYC 9654/9555/7713;
+  #   letting candidates land on different CPU types would bias fitness)
+  constraint: null
   extra_sbatch: []                     # raw extra '#SBATCH' lines, e.g. "--exclusive"
   # srun flags appended to the benchmark invocation, matching Denis's
   # validated run_file.sh: --mpi=pmix bootstraps MPI via PMIx (srun IS the
