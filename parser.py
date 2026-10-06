@@ -165,7 +165,9 @@ _ERROR_PATTERNS: list[tuple[str, re.Pattern, str]] = [
                 r"Wall clock time limit",
                 re.IGNORECASE),
      "The run hit the wall-clock limit or was cancelled before finishing. "
-     "The configuration is too slow for the requested time_limit."),
+     "Either the configuration is too slow for the requested time_limit, "
+     "or the shared filesystem was contended during this measurement "
+     "window (check whether similar configs scored well at other times)."),
     ("PERM",
      re.compile(r"Permission denied|Operation not permitted|EPERM", re.IGNORECASE),
      "A permission error occurred -- often an attempt to change striping on "

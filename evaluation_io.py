@@ -24,6 +24,15 @@ import sys
 import time
 from pathlib import Path
 
+try:  # OpenEvolve >= 0.4: evaluate() may return (metrics, artifacts); the
+    # artifacts are stored with the program and rendered into the mutation
+    # prompt of its descendants (config.include_artifacts).  Without this,
+    # a scored zero is *indistinguishable* from a timeout or a crash to the
+    # LLM -- it can only learn from failure reasons it can actually read.
+    from openevolve.evaluation_result import EvaluationResult
+except ImportError:  # pragma: no cover - fall back to the bare dict contract
+    EvaluationResult = None
+
 REPO = Path(__file__).resolve().parent
 
 _FITNESS_RE = re.compile(r"^FITNESS:\s*([0-9.eE+\-]+)", re.MULTILINE)
@@ -35,26 +44,77 @@ _METRICS_RE = re.compile(r"^EVAL_METRICS\s+(\{.*\})", re.MULTILINE)
 # authority on a running job.
 _EVAL_TIMEOUT_S = 3600
 
+# Feedback artifacts go straight into LLM prompts: keep them informative
+# but bounded.
+_FEEDBACK_CAP = 2400
+
+# Wall-clock timeouts on a shared Lustre are only *partly* the candidate's
+# fault.  Tell the mutator so it does not abandon a good family because of
+# somebody else's I/O storm (observed: contention windows moving throughput
+# 20-30% and killing otherwise-healthy evaluations at the time limit).
+_CONTENTION_NOTE = (
+    "\nNOTE: wall-clock timeouts on a shared filesystem are sometimes "
+    "caused by cluster-wide Lustre contention, not by this configuration. "
+    "If similar configurations scored well earlier, treat this as a "
+    "possibly-unlucky measurement window, not proof of a bad candidate."
+)
+
+
+# evaluate.py interleaves its classified feedback (lines starting with
+# [CATEGORY]) with timestamped logging output on stderr; only the former is
+# meaningful inside a mutation prompt.
+_LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
+
+
+def _clean_feedback(err):
+    """Keep classified feedback / human text, drop timestamped log lines."""
+    keep = [ln for ln in err.splitlines() if not _LOG_LINE_RE.match(ln)]
+    return "\n".join(keep).strip()
+
+
+def _result(metrics, feedback=None):
+    """Wrap metrics + optional text feedback into the richest container
+    OpenEvolve will accept; degrade to the plain dict if unavailable."""
+    if EvaluationResult is None or not feedback:
+        return metrics
+    return EvaluationResult(
+        metrics=metrics,
+        artifacts={"evaluation_feedback": feedback[:_FEEDBACK_CAP]},
+    )
+
 
 def evaluate(program_path):
-    """OpenEvolve entrypoint. Returns a metric dict with combined_score."""
+    """OpenEvolve entrypoint. Returns a metric dict (with classified-failure
+    text as an artifact when available) including combined_score."""
     path = Path(program_path)
 
     # Cheap gate first: the temp file must be valid JSON before burning an
     # entire Slurm allocation on it.
     try:
         json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"combined_score": 0.0, "valid_json": 0.0}
+    except Exception as exc:
+        return _result(
+            {"combined_score": 0.0, "valid_json": 0.0},
+            f"[INVALID_JSON] The candidate is not valid JSON and was never "
+            f"submitted: {exc}. Emit a syntactically valid candidate object "
+            f"inside the declared search space.",
+        )
 
     cmd = [sys.executable, str(REPO / "evaluate.py"), "-c", str(path)]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               cwd=str(REPO), timeout=_EVAL_TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        return {"combined_score": 0.0, "valid_json": 1.0, "eval_timeout": 1.0}
+        return _result(
+            {"combined_score": 0.0, "valid_json": 1.0, "eval_timeout": 1.0,
+             "timed_out": 1.0},
+            "[EVAL_TIMEOUT] The evaluator's watch-dog expired while the "
+            "batch job was still running; the job consumed its allocation "
+            "and scored zero." + _CONTENTION_NOTE,
+        )
 
     out = proc.stdout or ""
+    err = proc.stderr or ""
     metrics = {"valid_json": 1.0}
     m = _FITNESS_RE.search(out)
     if m is None:
@@ -68,7 +128,7 @@ def evaluate(program_path):
             stamp = time.strftime("%Y%m%d_%H%M%S")
             (faildir / f"{stamp}_{proc.returncode}.log").write_text(
                 f"$ {' '.join(cmd)}\n--- rc={proc.returncode}\n"
-                f"--- stdout ---\n{out}\n--- stderr ---\n{proc.stderr or ''}\n",
+                f"--- stdout ---\n{out}\n--- stderr ---\n{err}\n",
                 encoding="utf-8")
         except OSError:
             pass  # diagnostics must never break the loop
@@ -82,4 +142,15 @@ def evaluate(program_path):
         except Exception:
             pass  # secondary metrics are advisory; fitness already parsed
     metrics.setdefault("combined_score", 0.0)
-    return metrics
+
+    # evaluate.py prints its classified failure diagnosis (CONFIG_ERROR /
+    # TIMEOUT / OOM / MPI_LAUNCH / ... with quoted evidence) to stderr.
+    # Feed it to the mutator verbatim -- this is the ONLY channel by which
+    # the model learns which moves are wrong and why.
+    feedback = _clean_feedback(err)
+    if feedback:
+        metrics["has_feedback"] = 1.0
+        if "TIMEOUT" in feedback:
+            metrics["timed_out"] = 1.0
+            feedback += _CONTENTION_NOTE
+    return _result(metrics, feedback)
