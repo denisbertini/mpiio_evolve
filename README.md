@@ -44,7 +44,8 @@ git clone <repo> && cd mpiio_evolve
 3. **Configure** — edit `config.yaml`:
    * `cluster.account` / `cluster.partition` — must be valid for you
      (`sacctmgr -nP show assoc user=$USER format=account,partition`)
-   * `workspace.root` (default `/lustre/rz/dbertini2`) — writable Lustre area
+   * `workspace.root` — any writable Lustre area you own (all state lives
+     under `<workspace.root>/<state_dir>`, abbreviated `<state>` below)
    * and `openevolve_config.yaml` → `llm.api_base` / model (default
      `http://ccdev0022.hpc.gsi.de:8781/v1`)
 
@@ -87,9 +88,11 @@ tmux new -s evolve
 ## 4 · Watch it
 
 ```bash
-tail -f $(ls -t /lustre/rz/dbertini2/ppio_tune/*/openevolve_output/logs/* | head -1)
+# <state> = workspace.root + state_dir, straight out of config.yaml:
+STATE=$(awk -F'[:#]' '/^workspace:/{w=1} w&&/root:/{gsub(/[ "]/,"",$2);r=$2} w&&/state_dir:/{gsub(/[ "]/,"",$2);print r"/"$2; exit}' config.yaml)
+tail -f $(ls -t "$STATE"/*/openevolve_output/logs/* | head -1)
 squeue -u $USER
-tail -f $(ls -td /lustre/rz/dbertini2/ppio_tune/$USER/runs/* | head -1)/stdout.log
+tail -f $(ls -td "$STATE"/$USER/runs/* | head -1)/stdout.log
 ```
 
 | artifact | location |
