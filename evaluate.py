@@ -345,11 +345,23 @@ def evaluate(candidate: Mapping[str, Any],
         probe_prefix = ""
         if container and not simulate:
             runtime = container.split()[0]
+            # The runtime is used by the GENERATED job script on the compute
+            # nodes -- a local probe is only meaningful for the bare-metal
+            # controller.  Inside the controller SIF there is deliberately no
+            # nested apptainer (/.singularity.d exists in any apptainer/singularity
+            # container), so skip the probe there; MPIIO_EVOLVE_SKIP_RUNTIME_PROBE=1
+            # forces the skip anywhere (e.g. remote controller hosts).
+            local_probe = (os.path.isdir("/.singularity.d") is False
+                           and os.environ.get("MPIIO_EVOLVE_SKIP_RUNTIME_PROBE") != "1")
             if shutil.which(runtime) is None:
-                raise RuntimeError(
-                    f"container runtime '{runtime}' not found; build the image "
-                    f"with container/build_container.sh or disable the "
-                    f"'container' block in config.yaml")
+                if local_probe:
+                    raise RuntimeError(
+                        f"container runtime '{runtime}' not found; build the image "
+                        f"with container/build_container.sh or disable the "
+                        f"'container' block in config.yaml")
+                logger.info("container runtime '%s' not present locally -- OK: "
+                            "controller is containerized; '%s' resolves on the "
+                            "compute nodes at job time", runtime, runtime)
             probe_prefix = container
 
         engine = resolve_engine(cfg, cand, probe_prefix)
