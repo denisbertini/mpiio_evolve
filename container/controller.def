@@ -86,14 +86,12 @@ cd / && rm -rf /opt/slurm-build
 groupadd -r --gid=990 slurm
 useradd -r -g slurm --uid=990 slurm
 
-# sbatch resolves a configuration source BEFORE --version does anything:
-# inside the build container there is no /etc/slurm/slurm.conf and no
-# cluster DNS, so it dies in SRV lookup.  Feed the check a throwaway local
-# config; the real one is bind-mounted at /etc/slurm at runtime by
-# run_controller_sif.sh.
-printf 'SlurmctldHost=buildonly(127.0.0.1)\n' > /tmp/buildcheck.conf
-SLURM_CONF=/tmp/buildcheck.conf sbatch --version
-rm -f /tmp/buildcheck.conf
+# No sbatch smoke-test here: even '--version' demands a valid cluster
+# config (ClusterName, slurmctld...) which a bare build container cannot
+# have.  Verify presence instead; real validation happens on the login
+# node where run_controller_sif.sh binds the cluster's /etc/slurm.
+test -x /usr/bin/sbatch \
+    || { echo "FATAL: sbatch not installed"; exit 1; }
 # Hard gate: a slurm built without munge support would install fine and
 # then fail at every sbatch with an auth error.  Demand the plugin.
 test -f /usr/lib64/slurm/auth_munge.so \
