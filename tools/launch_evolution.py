@@ -43,7 +43,12 @@ if os.environ.get("MPIIO_EVOLVE_DISABLE_THINKING", "1") != "0":
     _orig_call_api = OpenAILLM._call_api
 
     async def _call_api_no_thinking(self, params):
-        params = {**params, "chat_template_kwargs": {"enable_thinking": False}}
+        # The OpenAI SDK validates kwargs against the official schema and
+        # REJECTS unknown ones ('chat_template_kwargs' included) -- merge it
+        # into the JSON body via the SDK's official extra_body escape hatch.
+        extra = dict(params.get("extra_body") or {})
+        extra["chat_template_kwargs"] = {"enable_thinking": False}
+        params = {**params, "extra_body": extra}
         return await _orig_call_api(self, params)
 
     OpenAILLM._call_api = _call_api_no_thinking
