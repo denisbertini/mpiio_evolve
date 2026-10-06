@@ -53,7 +53,9 @@ VPY=/venv/controller/bin/python           # interpreter inside the image
 # the image (%files): it must track the cluster's version.
 SPANK_PLUGIN=/usr/libexec/slurm-singularity-exec.so
 EXTRA_BIND=()
-[[ -e "$SPANK_PLUGIN" ]] && EXTRA_BIND+=("-B $SPANK_PLUGIN:ro")
+# NOTE the src:src:ro form: '-B path:ro' parses 'ro' as the DESTINATION
+# ("destination must be an absolute path"), options are only a third field.
+[[ -e "$SPANK_PLUGIN" ]] && EXTRA_BIND+=("-B $SPANK_PLUGIN:$SPANK_PLUGIN:ro")
 
 # FULL: everything a slurm client can want (same set validated on ccdev0002).
 FULL_BIND=(-B /usr/lib64/slurm -B /etc/slurm -B /var/run/munge
