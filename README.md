@@ -47,7 +47,7 @@ git clone <repo> && cd mpiio_evolve
    * `workspace.root` — any writable Lustre area you own (all state lives
      under `<workspace.root>/<state_dir>`, abbreviated `<state>` below)
    * and `openevolve_config.yaml` → `llm.api_base` / model (default
-     `http://ccdev0022.hpc.gsi.de:8781/v1`)
+     `http://llm-server.example.org:8781/v1`)
 
 ## 2 · Smoke test (5 min, no evolution)
 
