@@ -53,11 +53,32 @@ dnf install -y epel-release
 dnf install -y wget bzip2 tar rpm-build which
 dnf install -y python3.11 python3.11-pip python3.11-devel
 
-## Slurm client build deps (same set that worked in the plasma/dask image;
-## libjwt-devel is a hard BuildRequires of Slurm >= 24.11 and lives in EPEL9)
-dnf install -y munge munge-libs munge-devel \
-    openssl-devel pam-devel readline-devel sqlite-devel libjwt-devel \
+## Slurm client build deps.  NOTE: there is NO munge-devel anywhere on EL9
+## (AppStream ships only the runtime munge/munge-libs; EPEL9 drops munge
+## entirely and builds its slurm WITHOUT munge).  The cluster's slurmctld
+## authenticates via munge, so we build the tiny upstream package from
+## source below -- hence gcc/make here.
+dnf install -y gcc make xz libtool \
+    openssl-devel pam-devel readline-devel sqlite-devel \
     perl-ExtUtils-MakeMaker hwloc-libs
+dnf install -y libjwt-devel   # hard BuildRequires of Slurm >= 24.11 (EPEL9)
+
+## ------------------------------------------------------------------- munge
+# munge-devel does not exist in ANY EL9 repo; without libmunge+headers the
+# slurm tarball builds WITHOUT auth_munge and the client cannot authenticate
+# against the cluster.  Wire protocol is stable across munge 0.5.x, so the
+# upstream release need not match the cluster's exact patch level.
+MUNGE_VERSION=0.5.18
+mkdir -p /opt/munge-build && cd /opt/munge-build
+wget -nc https://github.com/dun/munge/releases/download/munge-$MUNGE_VERSION/munge-$MUNGE_VERSION.tar.xz
+tar xf munge-$MUNGE_VERSION.tar.xz
+cd munge-$MUNGE_VERSION
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --libdir=/usr/lib64
+make -j"$(nproc)"
+make install
+ldconfig
+munge --version
+cd / && rm -rf /opt/munge-build
 
 ## ------------------------------------------------------------------- Slurm
 # Client-only subset.  Default version is the cluster's (slurm 26.05.4);
@@ -74,6 +95,10 @@ rpm --install /root/rpmbuild/RPMS/x86_64/slurm-${VERSION}-*.x86_64.rpm \
               /root/rpmbuild/RPMS/x86_64/slurm-libs-${VERSION}-*.x86_64.rpm \
               /root/rpmbuild/RPMS/x86_64/slurm-munge-${VERSION}-*.x86_64.rpm
 sbatch --version
+# Hard gate: a slurm built without munge support would install fine and
+# then fail at every sbatch with an auth error.  Demand the plugin.
+test -f /usr/lib64/slurm/auth_munge.so \
+    || { echo "FATAL: slurm built WITHOUT auth_munge (munge step broken)"; exit 1; }
 rm -rf /opt/slurm-build
 
 ## -------------------------------------------------- OpenEvolve (pinned venv)
