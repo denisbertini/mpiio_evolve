@@ -48,6 +48,14 @@ fi
 STATE_ROOT="${MPIIO_EVOLVE_DEPLOY_ROOT:-/lustre/rz/dbertini2}"
 STATE="$STATE_ROOT/ppio_tune"
 
+# evaluate.py builds its state directory as <MPIIO_EVOLVE_ROOT>/<state_dir>.
+# With only the config's root (/lustre/rz/dbertini2) that lands OUTSIDE the
+# confinement wall (/lustre/rz/dbertini2/dbertini -> Errno 30 read-only).
+# The container's single writable world is $STATE, so pin the root there:
+# workspace resolves to ppio_tune/$MPIIO_EVOLVE_STATE_DIR/{runs,...}, exactly
+# the layout this runner advertises.
+export MPIIO_EVOLVE_ROOT="$STATE"
+
 # Writable CWD outside the read-only repo: OpenEvolve's default
 # ./openevolve_output (checkpoints, logs) lands HERE, not on :ro code.
 RUNDIR="$STATE/controller_run"

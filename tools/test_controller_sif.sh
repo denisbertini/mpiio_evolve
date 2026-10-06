@@ -42,6 +42,8 @@ command -v apptainer >/dev/null 2>&1 || { echo "ERROR: no apptainer on this node
 STATE="${MPIIO_EVOLVE_DEPLOY_ROOT:-/lustre/rz/dbertini2}/ppio_tune"
 TMPD="$STATE/controller_smoketest"
 mkdir -p "$TMPD" || { echo "ERROR: cannot create $TMPD (not on the cluster?)" >&2; exit 2; }
+# same workspace convention as run_controller_sif.sh (state lives INSIDE $STATE)
+export MPIIO_EVOLVE_ROOT="$STATE"
 
 VPY=/venv/controller/bin/python           # interpreter inside the image
 
