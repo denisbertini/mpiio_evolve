@@ -46,13 +46,24 @@ mkdir -p "$TMPD" || { echo "ERROR: cannot create $TMPD (not on the cluster?)" >&
 VPY=/venv/controller/bin/python           # interpreter inside the image
 
 # bind sets -------------------------------------------------------------------
+# The cluster's /etc/slurm/plugstack.conf.d/singularity-exec.conf makes
+# sbatch dlopen the host SPANK plugin at /usr/libexec/slurm-singularity-exec.so
+# (client-side plugin-stack init).  The .so lives on the login node only ->
+# bind it read-only, same pattern as the munge socket.  Do NOT bake it into
+# the image (%files): it must track the cluster's version.
+SPANK_PLUGIN=/usr/libexec/slurm-singularity-exec.so
+EXTRA_BIND=()
+[[ -e "$SPANK_PLUGIN" ]] && EXTRA_BIND+=("-B $SPANK_PLUGIN:ro")
+
 # FULL: everything a slurm client can want (same set validated on ccdev0002).
 FULL_BIND=(-B /usr/lib64/slurm -B /etc/slurm -B /var/run/munge
            -B /var/spool/slurm -B /var/lib/sss/pipes
-           -B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro")
+           -B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro"
+           "${EXTRA_BIND[@]}")
 # CONFINED: exactly the run_controller_sif.sh wall.  Munge socket is expected
 # from apptainer.conf 'mungepath'; test [5] is what proves or refutes it.
-CONF_BIND=(-B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro" -B /etc/slurm:/etc/slurm:ro)
+CONF_BIND=(-B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro" -B /etc/slurm:/etc/slurm:ro
+           "${EXTRA_BIND[@]}")
 
 declare -i npass=0 nfail=0 nskip=0
 ok()   { echo "  [PASS] $*"; npass+=1; }
@@ -152,9 +163,13 @@ else
     prev=$nfail
     check "confined job ran and returned" submit_wait --contain "${CONF_BIND[@]}"
     if (( nfail > prev )); then
-        echo "         -> if the failure mentions munge, add '-B /var/run/munge'"
+        echo "         -> if it mentions MUNGESOCKET: add '-B /var/run/munge'"
         echo "            to APPTAINER_BINDPATH in tools/run_controller_sif.sh"
-        echo "            (i.e. apptainer.conf 'mungepath' is not active here)."
+        echo "            (apptainer.conf 'mungepath' not active here)."
+        echo "         -> if it still mentions slurm-singularity-exec.so: the"
+        echo "            plugin's own library deps are missing in the image;"
+        echo "            run  ldd /usr/libexec/slurm-singularity-exec.so"
+        echo "            on the host and bind the missing libs ro as well."
     fi
 fi
 

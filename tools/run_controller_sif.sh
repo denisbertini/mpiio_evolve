@@ -66,6 +66,15 @@ export TMPDIR="$STATE/tmp"
 # ---- the confinement wall: state rw, code ro, slurm conf.  Nothing else. ----
 export APPTAINER_BINDPATH="$STATE,$REPO_ROOT:${REPO_ROOT}:ro,/etc/slurm:/etc/slurm:ro"
 
+# sbatch initializes the SPANK plugin stack CLIENT-side from the cluster's
+# /etc/slurm/plugstack.conf.d/*.conf; RLX lists
+# /usr/libexec/slurm-singularity-exec.so there, which exists on the host but
+# not in the image -> sbatch aborts ("Failed to initialize plugin stack")
+# unless the .so is bound read-only, same pattern as the munge socket.
+if [[ -e /usr/libexec/slurm-singularity-exec.so ]]; then
+    APPTAINER_BINDPATH="$APPTAINER_BINDPATH,/usr/libexec/slurm-singularity-exec.so:/usr/libexec/slurm-singularity-exec.so:ro"
+fi
+
 echo "mpiio_evolve CONTAINER controller"
 echo "  sif   : $SIF"
 echo "  state : $STATE (dir: $MPIIO_EVOLVE_STATE_DIR)"
