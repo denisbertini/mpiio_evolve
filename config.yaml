@@ -31,7 +31,11 @@ workspace:
   # Real runs ABORT if no lfs binary exists: without it every stripe
   # mutation is a silent no-op and the fitness landscape is meaningless.
   # Set false only to deliberately tune MPI-IO hints on non-Lustre storage.
-  lustre_strict: true
+  # CONTAINER MODE: the controller SIF carries NO lfs (see controller.def
+  # %help), so real runs from the container require false -> hints-only
+  # tuning.  Restore true for the bare-metal controller (login-node lfs)
+  # when stripe_count/stripe_size are part of the search.
+  lustre_strict: false
 
 cluster:
   # ---- Slurm resource request (rendered into the #SBATCH header) ----------

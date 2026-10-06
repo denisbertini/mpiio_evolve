@@ -32,7 +32,11 @@ llm:
   api_key: "unused"             # proxy ignores it; the client requires one
   temperature: 0.6              # creative but the JSON must stay valid
   top_p: 0.95
-  max_tokens: 2048              # reasoning model: reasoning burst + candidate
+  max_tokens: 8192              # THINKING model: the reasoning burst counts
+                                # against this cap.  2048 was always consumed
+                                # by reasoning alone -> completion truncated
+                                # at exactly max_tokens, 'No valid code found
+                                # in response', every iteration scored 0.
   timeout: 300
   retries: 3
   retry_delay: 10
