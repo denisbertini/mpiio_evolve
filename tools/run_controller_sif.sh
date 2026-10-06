@@ -3,7 +3,10 @@
 # mpiio_evolve -- run the controller CONFINED inside the controller SIF.
 #
 # The image (container/controller.def -> images/controller.sif) carries
-# OpenEvolve + a version-matched Slurm client + lfs.  With --contain the
+# OpenEvolve (+ its full pinned dependency tree) + a version-matched Slurm
+# client.  No Lustre client: set workspace.lustre_strict: false to tune
+# MPI-IO hints from the container (see container/controller.def %help).
+# With --contain the
 # container sees ONLY:
 #   * ppio_tune          rw   same path  (all mutable state)
 #   * the repo           ro   same path  (code cannot modify itself)
@@ -17,7 +20,9 @@
 #   tmux new -s evolve
 #   ./tools/run_controller_sif.sh [openevolve_config.yaml]
 #
-# Build the image first (github/internet build node or via proxy):
+# Build the image first (github/internet build node or via proxy).  The
+# Slurm client defaults to the cluster's 26.05.4; override with
+# --build-arg SLURM_VERSION=<x.yy.z> only for a cluster running another:
 #   sudo http_proxy=$PROXY https_proxy=$PROXY \
 #     apptainer build images/controller.sif container/controller.def
 # =============================================================================

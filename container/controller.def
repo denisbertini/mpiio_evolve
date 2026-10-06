@@ -9,8 +9,9 @@ From: rockylinux:9.5
 
 %help
     Self-contained CONTROLLER image for mpiio_evolve (OpenEvolve-driven
-    MPI-IO/Lustre tuning).  Carries Python 3.11 + OpenEvolve, a Slurm
-    client and lfs, so the evolution loop runs CONFINED on a login node:
+    MPI-IO tuning).  Carries Python 3.11 + OpenEvolve (+ every package it
+    imports at runtime) and a version-matched Slurm CLIENT, so the evolution
+    loop runs CONFINED on a login node:
 
         ./tools/run_controller_sif.sh [openevolve_config.yaml]
 
@@ -20,9 +21,27 @@ From: rockylinux:9.5
     the rest of /lustre are invisible.  Benchmark jobs themselves run
     OUTSIDE this container (unchanged plasma_pp.sif path on compute nodes).
 
+    NO Lustre client here, on purpose: the kernel client lives on the
+    host only and the userspace lfs adds nothing inside this image.
+    Consequence: stripe_count/stripe_size mutations cannot be applied
+    from the container.  Either run the bare-metal controller
+    (tools/run_controller.sh on the login node, host lfs) when striping
+    is part of the search, or set  workspace.lustre_strict: false  in
+    config.yaml to deliberately tune MPI-IO hints only.  Without that,
+    evaluate.py refuses real runs with a clear error (by design).
+
+    BUILD: the Slurm client defaults to the cluster version 26.05.4 and
+    must otherwise MATCH the cluster ('sbatch --version' on the login
+    node), e.g. for another cluster:
+
+        apptainer build --build-arg SLURM_VERSION=<x.yy.z> \
+            images/controller.sif container/controller.def
+
+    One sif per cluster (Orion ccdev and virgo4 differ); pick it with
+    MPIIO_EVOLVE_CONTROLLER_SIF.
+
 %environment
     export PATH=/venv/controller/bin:/usr/local/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/lib64:$LD_LIBRARY_PATH
 
 %post
 set -eux
@@ -32,22 +51,18 @@ dnf install -y epel-release
 dnf install -y wget bzip2 tar rpm-build which
 dnf install -y python3.11 python3.11-pip python3.11-devel
 
-## Slurm client build deps (same set that worked in the plasma/dask image)
+## Slurm client build deps (same set that worked in the plasma/dask image;
+## libjwt-devel is a hard BuildRequires of Slurm >= 24.11 and lives in EPEL9)
 dnf install -y munge munge-libs munge-devel \
-    openssl-devel pam-devel readline-devel sqlite-devel \
+    openssl-devel pam-devel readline-devel sqlite-devel libjwt-devel \
     perl-ExtUtils-MakeMaker hwloc-libs
-# newer Slurm BuildRequires -- present under slightly different names
-# across EL9 streams; if rpmbuild still complains it prints the exact
-# package name, install it and rebuild.
-dnf install -y libjwt-devel || dnf install -y libjwt || true
 
 ## ------------------------------------------------------------------- Slurm
-# VERSION MUST match the TARGET CLUSTER's controller: check
-#     sbatch --version
-# on the login node BEFORE building (Orion ccdev and virgo4 differ --
-# build one sif per cluster and pick it with MPIIO_EVOLVE_CONTROLLER_SIF).
-# Old releases live under download.schedmd.com/slurm/archive/ .
-VERSION=26.05.4
+# Client-only subset.  Default version is the cluster's (slurm 26.05.4);
+# a client that does not match the cluster's slurmctld refuses to talk to
+# it (protocol mismatch), so other clusters override at build time:
+#   apptainer build --build-arg SLURM_VERSION=<x.yy.z> ...
+VERSION="${SLURM_VERSION:-26.05.4}"
 mkdir -p /opt/slurm-build && cd /opt/slurm-build
 wget -nc https://download.schedmd.com/slurm/slurm-$VERSION.tar.bz2 \
   || wget -nc https://download.schedmd.com/slurm/archive/slurm-$VERSION.tar.bz2
@@ -59,32 +74,34 @@ rpm --install /root/rpmbuild/RPMS/x86_64/slurm-${VERSION}-*.x86_64.rpm \
 sbatch --version
 rm -rf /opt/slurm-build
 
-## ---------------------------------------------------------------------- lfs
-# Userspace Lustre utils ONLY -- the kernel client stays on the host, so
-# 'lfs setstripe' works through the bound Lustre mounts (infrastructure.py
-# applies stripe layouts from the controller).  RHEL9 dropped lustre from
-# appstream, so take it from the Whamcloud public repo (client userspace
-# version does not need to match the host kernel module).
-cat > /etc/yum.repos.d/lustre-client.repo <<'EOF'
-[lustre-client]
-name=Lustre Client
-gpgcheck=0
-baseurl=http://download.whamcloud.com/public/lustre/lustre-2.15.4/el9/client
-EOF
-dnf install -y lustre-client || dnf install -y lustre-client-utils
-lfs version
-
 ## -------------------------------------------------- OpenEvolve (pinned venv)
-# THE whole point: dependency tree installed at BUILD time, once, loudly --
-# never again on a login node.
+# THE whole point: the FULL dependency tree installed at BUILD time, once,
+# loudly -- never again on a login node.  Every package OpenEvolve imports
+# at runtime is listed EXPLICITLY (pip transitive resolution alone is not a
+# contract): openai = LLM client, pyyaml = config, dacite = config->dataclass,
+# numpy/tqdm = engine, flask = monitoring API, cloudpickle = program serialis-
+# ation (required by current openevolve releases, missing from older metadata).
 python3.11 -m venv /venv/controller
 /venv/controller/bin/pip install --upgrade pip setuptools wheel
-/venv/controller/bin/pip install openevolve
-/venv/controller/bin/python -c "import openevolve; print('openevolve import OK')"
+/venv/controller/bin/pip install \
+    "openevolve==0.4.0" \
+    "openai>=1.0.0" \
+    "pyyaml>=6.0" \
+    "numpy>=1.22.0" \
+    "tqdm>=4.64.0" \
+    "flask" \
+    "dacite>=1.9.2" \
+    "cloudpickle>=2.0.0"
+# Hard gate: import exactly what tools/launch_evolution.py + openevolve need.
+# A missing dependency must fail the IMAGE BUILD, not the first tmux session.
+/venv/controller/bin/python -c "
+from openevolve import OpenEvolve
+import openai, yaml, numpy, tqdm, flask, dacite, cloudpickle
+print('openevolve + full dependency tree import OK')"
 
 ## --------------------------------------------------------------- slim down
 dnf clean all
-rm -rf /var/cache/dnf /root/.cache/pip /tmp/*
+rm -rf /var/cache/dnf /root/.cache/pip /root/rpmbuild /tmp/*
 
 %runscript
     exec "$@"
