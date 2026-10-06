@@ -105,7 +105,56 @@ A candidate that scores `0.0` is an *answer*, not a crash: `feedback.txt` /
 the CONFIG_ERROR text says why (out-of-space value, submission rejection,
 benchmark crash) and the LLM is told so it can correct course.
 
-## 5 · Knobs you will actually touch
+## 5 · The safety model: what the LLM can — and cannot — do
+
+An LLM in the loop is only acceptable on a shared cluster if its power is
+structured away, not promised away. In `mpiio_evolve` the model is treated as
+**untrusted input at every step it touches**, and there is exactly *one* thing
+it can do in the world:
+
+> **The LLM's only actuator is a JSON configuration candidate.** It never
+> writes files, never runs commands, never sees Slurm. Everything downstream
+> of it is deterministic, bounded code.
+
+Five layers stand between a hallucinating model and your cluster:
+
+1. **No code execution — by design.** The evolved artifact is a pure-data
+   candidate JSON (no diffs, no scripts, no free text reaching any shell).
+   Malformed JSON is rejected in microseconds with zero side effects.
+2. **Declared search space, enforced before submission.** Every hint key and
+   value must appear in `config.yaml → search_space` (with byte-semantic
+   matching: `4M ≡ 4194304`). Unknown hints are *dropped*, site-banned poison
+   combos (e.g. `cb_write=enable` + `ds_write=disable`) are refused outright,
+   and `extra_env` keys must match an explicit prefix allowlist (`ROMIO_`,
+   `UCX_`, …). A made-up value cannot silently reach the wire.
+3. **OS-level confinement of the controller itself.** The agent loop runs
+   inside `controller.sif` under `apptainer exec --contain`: it sees only the
+   Lustre state directory (rw), the repo (ro), `/etc/slurm` (ro), the munge
+   socket (ro) — and *nothing else*: no `$HOME`, no rest of `/lustre`, no host
+   `/usr`. The code cannot modify itself (read-only bind). Every filesystem
+   mutation inside the evaluator additionally passes an `ensure_inside()` path
+   jail scoped to the state directory. Submitted benchmark jobs run as the
+   same user that submits interactively — with no more privilege than usual.
+4. **Bounded blast radius per experiment.** One Slurm allocation at a time
+   (`parallel_evaluations: 1` by default), a hard `time_limit` per evaluation
+   kills runaway jobs, a global iteration budget ends the campaign, the
+   controller runs `nice -n 5` (login-node courtesy), and old run data is
+   garbage-collected automatically. The worst a catastrophically bad candidate
+   can cost is one evaluation window.
+5. **The loop never dies — and never hides anything.** Any failure — invalid
+   mutant, rejected layout, OOM, MPI crash, scheduler error — degrades to a
+   scored zero plus classified, human-readable feedback (`feedback.txt`), and
+   the campaign continues. Every attempt remains auditable on disk: the exact
+   `submit.sh` that was submitted, the hint files, full job stdout/stderr, and
+   the parsed metrics (`result.json`, `measurements.jsonl`).
+
+Net guarantee for the cluster admin, in one sentence: **the agent can only
+propose values inside a list you declared legal, can only consume resources
+you sized in `config.yaml`, runs inside a container that cannot see anything
+you did not explicitly bind into it, and leaves a complete paper trail for
+every experiment it ever ran.**
+
+## 6 · Knobs you will actually touch
 
 | file | key | meaning |
 |---|---|---|
@@ -118,7 +167,7 @@ benchmark crash) and the LLM is told so it can correct course.
 | | `llm.api_base`, `llm.models`, `max_tokens` | the endpoint (keep `max_tokens ≥ 8192` for thinking models, or thinking off via launcher) |
 | | `random_seed` | `null` for exploration diversity; `42` for exact repro |
 
-## 6 · Troubleshooting (all previously hit, all solved)
+## 7 · Troubleshooting (all previously hit, all solved)
 
 | symptom | cause / fix |
 |---|---|
@@ -132,7 +181,7 @@ benchmark crash) and the LLM is told so it can correct course.
 | Squid 403 from the LLM endpoint | login-node proxy; runners export `NO_PROXY` for the endpoint host |
 | job stays `PD` / `Invalid account` | `cluster.account`/`partition` — check with `sacctmgr` (§1.3) |
 
-## 7 · Bare-metal alternative
+## 8 · Bare-metal alternative
 
 No container for the controller? `./tools/bootstrap_controller.sh --openevolve`
 builds a Lustre-resident venv and `./tools/run_controller.sh` runs the same
