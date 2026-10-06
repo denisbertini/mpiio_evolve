@@ -28,6 +28,13 @@ LLM_KEY="${OPENAI_API_KEY:-unused}"
 MAXTOK="${LLM_MAX_TOKENS:-512}"
 PROMPT="What is 17*23? Answer with just the number."
 
+# The Squid on the login nodes must be bypassed (same rule as the
+# controller): without this, probes can be refused with Squid 403 HTML
+# pages instead of reaching the LLM endpoint.
+_hn="${LLM_URL#*://}"; _hn="${_hn%%/*}"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$_hn,localhost,127.0.0.1"
+export no_proxy="$NO_PROXY"
+
 command -v curl >/dev/null || { echo "ERROR: curl not found" >&2; exit 2; }
 PY=python3
 
