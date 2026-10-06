@@ -29,7 +29,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SIF="${MPIIO_EVOLVE_CONTROLLER_SIF:-$REPO_ROOT/images/controller.sif}"
+SIF="${MPIIO_EVOLVE_CONTROLLER_SIF:-}"
+if [[ -z "$SIF" ]]; then
+    for cand in "$REPO_ROOT/images/controller.sif" "$REPO_ROOT/container/controller.sif"; do
+        [[ -f "$cand" ]] && { SIF="$cand"; break; }
+    done
+    SIF="${SIF:-$REPO_ROOT/images/controller.sif}"   # for the error message
+fi
 CFG="${1:-openevolve_config.yaml}"
 
 if [[ ! -f "$SIF" ]]; then
