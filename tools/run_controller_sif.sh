@@ -53,6 +53,12 @@ STATE="$STATE_ROOT/ppio_tune"
 RUNDIR="$STATE/controller_run"
 mkdir -p "$RUNDIR" "$STATE/.fake_home" "$STATE/tmp"
 
+# NOTE: under --contain the container's cwd is $HOME (the fake home), NOT
+# wherever this script cd'd -- so the output dir cannot be derived from cwd
+# inside the container; pass it explicitly (host env propagates through
+# 'apptainer exec').
+export MPIIO_EVOLVE_OUTPUT_DIR="$RUNDIR/openevolve_output"
+
 # LLM endpoint (identical semantics to the bare-metal run_controller.sh).
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}ccdev0022.hpc.gsi.de,localhost,127.0.0.1"
 export no_proxy="$NO_PROXY"
