@@ -61,7 +61,11 @@ from slurm_launcher import SlurmLauncher, SlurmResources
 logger = logging.getLogger("mpiio_evolve.evaluate")
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
+# MPIIO_EVOLVE_CONFIG lets a test/alt profile drive every layer, including
+# the evaluate.py subprocesses spawned by evaluation_io (which pass no
+# --config): point it at an absolute path.
+DEFAULT_CONFIG = Path(os.environ.get("MPIIO_EVOLVE_CONFIG")
+                      or (REPO_ROOT / "config.yaml"))
 
 
 # ---------------------------------------------------------------------------
