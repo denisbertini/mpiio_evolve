@@ -17,7 +17,11 @@ max_iterations: 40              # ~10-12 min/eval on idle Orion -> 40 gens
                                # (checkpointed population)
 checkpoint_interval: 5
 log_level: "INFO"
-random_seed: 42
+random_seed:                  # null -> no seeding: the API 'seed' param is
+                              # omitted, so the LLM samples freely (identical
+                              # prompts yield DIFFERENT mutants; with a fixed
+                              # seed llama.cpp replays byte-identical twins).
+                              # Set 42 for exact-replay debugging sessions.
 
 language: "json"                # the evolved "program" is a candidate config
 file_suffix: ".json"            # temp candidate files parse as JSON downstream
