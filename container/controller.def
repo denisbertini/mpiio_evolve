@@ -123,8 +123,11 @@ import openai, yaml, numpy, tqdm, flask, dacite, cloudpickle
 print('openevolve + full dependency tree import OK')"
 
 ## --------------------------------------------------------------- slim down
+# NEVER 'rm -rf /tmp/*' here: in %post, /tmp IS THE HOST /tmp (bound in by
+# apptainer) -- wiping it deletes login-node files and Apptainer's own
+# build mounts.  Build scratch (/opt/slurm-build) was removed in place.
 dnf clean all
-rm -rf /var/cache/dnf /root/.cache/pip /tmp/*
+rm -rf /var/cache/dnf /root/.cache/pip
 
 %runscript
     exec "$@"
