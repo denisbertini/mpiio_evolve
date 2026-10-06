@@ -1,5 +1,7 @@
 Bootstrap: docker
-From: rockylinux:9.5
+# Same EL9 base as plasma_pp.def (ABI parity for the Slurm/munge client
+# stack built in %post).
+From: rockylinux/rockylinux:9.7
 
 %labels
     APPLICATION_NAME mpiio_evolve controller
