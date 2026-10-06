@@ -42,6 +42,22 @@ From: rockylinux/rockylinux:9.7
     One sif per cluster (Orion ccdev and virgo4 differ); pick it with
     MPIIO_EVOLVE_CONTROLLER_SIF.
 
+%files
+    # Slurm commands dlopen the UNVERSIONED 'libslurmfull.so'; the image's
+    # own copy lives inside the plugin dir /usr/lib64/slurm/, which gets
+    # shadowed when the host's /usr/lib64/slurm is bound in (the host keeps
+    # it versioned only).  Unversioned copies in the normal lib path make
+    # sinfo/srun/sbatch work in both cases.  Same trick as plasma_pp.def,
+    # adapted to slurm 26.05.4 (soname libslurm.so.45).
+    # NOTE: %files copies from the BUILD NODE -- build on a login node
+    # running exactly this slurm version, else apptainer fails the build.
+    /lib64/libslurmfull-26.05.4.so  /lib64/libslurmfull-26.05.4.so
+    /lib64/libslurmfull-26.05.4.so  /lib64/libslurmfull.so
+    /lib64/libslurm.so.45.0.0       /lib64/libslurm.so.45.0.0
+    /lib64/libslurm.so.45.0.0       /lib64/libslurm.so
+    /lib64/libslurm_pmi-26.05.4.so  /lib64/libslurm_pmi-26.05.4.so
+    /lib64/libslurm_pmi-26.05.4.so  /lib64/libslurm_pmi.so
+
 %environment
     export PATH=/venv/controller/bin:/usr/local/bin:$PATH
 
@@ -123,6 +139,9 @@ import openai, yaml, numpy, tqdm, flask, dacite, cloudpickle
 print('openevolve + full dependency tree import OK')"
 
 ## --------------------------------------------------------------- slim down
+# Register the %files-copied slurm libs (unversioned libslurmfull.so etc.)
+# in the loader cache; %files content is already in place when %post runs.
+ldconfig
 # NEVER 'rm -rf /tmp/*' here: in %post, /tmp IS THE HOST /tmp (bound in by
 # apptainer) -- wiping it deletes login-node files and Apptainer's own
 # build mounts.  Build scratch (/opt/slurm-build) was removed in place.
