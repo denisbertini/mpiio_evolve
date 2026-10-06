@@ -18,8 +18,9 @@ From: rockylinux/rockylinux:9.7
         ./tools/run_controller_sif.sh [openevolve_config.yaml]
 
     The container sees only: ppio_tune (rw), the repo (ro), /etc/slurm
-    (ro) and the munge socket (auto-bound by apptainer.conf 'mungepath',
-    same mechanism that made the old dask image submit jobs).  $HOME and
+    (ro), the munge socket (ro) and the cluster SPANK plugin (ro) -- the
+    latter two bound explicitly by tools/run_controller_sif.sh, since
+    apptainer.conf 'mungepath' is not active on this cluster.  $HOME and
     the rest of /lustre are invisible.  Benchmark jobs themselves run
     OUTSIDE this container (unchanged plasma_pp.sif path on compute nodes).
 

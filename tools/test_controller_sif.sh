@@ -62,10 +62,12 @@ FULL_BIND=(-B /usr/lib64/slurm -B /etc/slurm -B /var/run/munge
            -B /var/spool/slurm -B /var/lib/sss/pipes
            -B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro"
            "${EXTRA_BIND[@]}")
-# CONFINED: exactly the run_controller_sif.sh wall.  Munge socket is expected
-# from apptainer.conf 'mungepath'; test [5] is what proves or refutes it.
+# CONFINED: exactly the run_controller_sif.sh wall (which now includes the
+# guarded munge-socket + spank-plugin binds; test [5] validates that combo).
+MUNGE_SOCK=/var/run/munge/munge.socket.2
 CONF_BIND=(-B "$STATE" -B "$REPO_ROOT:$REPO_ROOT:ro" -B /etc/slurm:/etc/slurm:ro
            "${EXTRA_BIND[@]}")
+[[ -S "$MUNGE_SOCK" ]] && CONF_BIND+=("-B $MUNGE_SOCK:$MUNGE_SOCK:ro")
 
 declare -i npass=0 nfail=0 nskip=0
 ok()   { echo "  [PASS] $*"; npass+=1; }

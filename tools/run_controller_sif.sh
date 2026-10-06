@@ -11,8 +11,8 @@
 #   * ppio_tune          rw   same path  (all mutable state)
 #   * the repo           ro   same path  (code cannot modify itself)
 #   * /etc/slurm         ro              (client needs slurmctld address)
-#   * munge socket       auto-bound by apptainer.conf 'mungepath' -- the
-#                        same mechanism that let the old dask image submit.
+#   * munge socket       ro  (bound explicitly by this script -- this
+#                        cluster's apptainer.conf has no active 'mungepath')
 # $HOME and the rest of /lustre are INVISIBLE.  Submitted benchmark jobs
 # run outside this container on compute nodes and are unaffected.
 #
@@ -65,6 +65,14 @@ export TMPDIR="$STATE/tmp"
 
 # ---- the confinement wall: state rw, code ro, slurm conf.  Nothing else. ----
 export APPTAINER_BINDPATH="$STATE,$REPO_ROOT:${REPO_ROOT}:ro,/etc/slurm:/etc/slurm:ro"
+
+# munge socket: this cluster's apptainer.conf has NO active 'mungepath', so
+# --contain hides it and sbatch dies with 'Munge encode failed /
+# /var/run/munge/munge.socket.2: No such file or directory' (proven by
+# test [5] of tools/test_controller_sif.sh).  Bind it explicitly.
+if [[ -S /var/run/munge/munge.socket.2 ]]; then
+    APPTAINER_BINDPATH="$APPTAINER_BINDPATH,/var/run/munge/munge.socket.2:/var/run/munge/munge.socket.2:ro"
+fi
 
 # sbatch initializes the SPANK plugin stack CLIENT-side from the cluster's
 # /etc/slurm/plugstack.conf.d/*.conf; RLX lists
