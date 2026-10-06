@@ -17,7 +17,7 @@ candidate is a small JSON that must stay inside the search space declared in
 
 ---
 
-## 1 · One-time setup (per cluster)
+## 1 · One-time setup
 
 ```bash
 git clone <repo> && cd mpiio_evolve
@@ -84,7 +84,7 @@ tmux new -s evolve
 * Run inside `tmux` always: a detached ssh session otherwise kills the
   controller mid-benchmark.
 
-## 4 · Watch it (three commands)
+## 4 · Watch it
 
 ```bash
 tail -f $(ls -t /lustre/rz/dbertini2/ppio_tune/*/openevolve_output/logs/* | head -1)
@@ -154,7 +154,7 @@ you sized in `config.yaml`, runs inside a container that cannot see anything
 you did not explicitly bind into it, and leaves a complete paper trail for
 every experiment it ever ran.**
 
-## 6 · Knobs you will actually touch
+## 6 · Runtime parameters
 
 | file | key | meaning |
 |---|---|---|
@@ -167,7 +167,7 @@ every experiment it ever ran.**
 | | `llm.api_base`, `llm.models`, `max_tokens` | the endpoint (keep `max_tokens ≥ 8192` for thinking models, or thinking off via launcher) |
 | | `random_seed` | `null` for exploration diversity; `42` for exact repro |
 
-## 7 · Troubleshooting (all previously hit, all solved)
+## 7 · Troubleshooting
 
 | symptom | cause / fix |
 |---|---|
