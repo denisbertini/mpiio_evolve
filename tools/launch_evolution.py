@@ -28,6 +28,29 @@ OUTPUT = os.environ.get("MPIIO_EVOLVE_OUTPUT_DIR", str(Path.cwd() / "openevolve_
 
 from openevolve import OpenEvolve  # noqa: E402  (venv: /venv/controller)
 
+# --------------------------------------------------------------------------
+# Thinking-model kill switch.  Qwen-style reasoning consumed the ENTIRE
+# max_tokens budget (completion pinned at exactly max_tokens, 'No valid
+# code found').  llama.cpp's OpenAI endpoint honors the non-standard
+#   "chat_template_kwargs": {"enable_thinking": false}
+# but openevolve 0.4's OpenAI client cannot send extra body params -- so
+# inject it at the single choke point, OpenAILLM._call_api(params).
+# Disable this injection with MPIIO_EVOLVE_DISABLE_THINKING=0 (e.g. if a
+# future strict server rejects unknown fields).
+if os.environ.get("MPIIO_EVOLVE_DISABLE_THINKING", "1") != "0":
+    from openevolve.llm.openai import OpenAILLM
+
+    _orig_call_api = OpenAILLM._call_api
+
+    async def _call_api_no_thinking(self, params):
+        params = {**params, "chat_template_kwargs": {"enable_thinking": False}}
+        return await _orig_call_api(self, params)
+
+    OpenAILLM._call_api = _call_api_no_thinking
+    print("mpiio_evolve: thinking disabled via chat_template_kwargs "
+          "(MPIIO_EVOLVE_DISABLE_THINKING=0 to re-enable)")
+
+
 kwargs = dict(initial_program_path=INITIAL, evaluation_file=EVALUATOR)
 params = inspect.signature(OpenEvolve.__init__).parameters
 if "config" in params:                       # openevolve >= 0.4

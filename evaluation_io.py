@@ -17,9 +17,11 @@ an exception.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -55,6 +57,21 @@ def evaluate(program_path):
     out = proc.stdout or ""
     metrics = {"valid_json": 1.0}
     m = _FITNESS_RE.search(out)
+    if m is None:
+        # OpenEvolve discards the subprocess output -- without this dump a
+        # zero score is undiagnosable.  Keep stdout+stderr of every failed
+        # evaluation under <output>/eval_failures/ (next to the run logs).
+        try:
+            faildir = Path(os.environ.get("MPIIO_EVOLVE_OUTPUT_DIR",
+                                          Path.cwd())) / "eval_failures"
+            faildir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            (faildir / f"{stamp}_{proc.returncode}.log").write_text(
+                f"$ {' '.join(cmd)}\n--- rc={proc.returncode}\n"
+                f"--- stdout ---\n{out}\n--- stderr ---\n{proc.stderr or ''}\n",
+                encoding="utf-8")
+        except OSError:
+            pass  # diagnostics must never break the loop
     metrics["combined_score"] = float(m.group(1)) if m else 0.0
     mm = _METRICS_RE.search(out)
     if mm:
