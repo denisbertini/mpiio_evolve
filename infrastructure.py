@@ -87,6 +87,24 @@ def parse_size(text: Any) -> Optional[int]:
 # Candidate data model
 # ---------------------------------------------------------------------------
 
+_UNIT_MULT = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+
+
+def _size_key(value: Any):
+    """Canonical comparison key for size-like strings.
+
+    '4M', '4 MiB', '4MB' and '4194304' all map to the same byte count, so a
+    candidate that spells a declared value differently (LLMs love raw byte
+    strings) is matched SEMANTICALLY instead of being rejected on literal
+    string inequality. Non-size values compare as stripped strings, as before.
+    """
+    s = str(value).strip().replace("_", "")
+    t = s.upper().rstrip("B").rstrip("I")          # 4MIB -> 4M, 4MB -> 4M
+    m = re.fullmatch(r"(\d+)\s*([KMGT]?)", t)
+    if m:
+        return _UNIT_MULT[m.group(2)] * int(m.group(1))
+    return s
+
 
 @dataclass
 class LustreStripeSpec:
@@ -102,7 +120,8 @@ class LustreStripeSpec:
             raise ValueError(
                 f"stripe_count={self.stripe_count} outside search space {counts}"
             )
-        if sizes and str(self.stripe_size) not in [str(s) for s in sizes]:
+        if sizes and not any(_size_key(self.stripe_size) == _size_key(s)
+                             for s in sizes):
             raise ValueError(
                 f"stripe_size={self.stripe_size!r} outside search space {sizes}"
             )
@@ -174,7 +193,9 @@ def validate_hint_values(hints: Mapping[str, str],
         if options is None:
             continue
         allowed = [_norm_hint(o) for o in options]
-        if value not in allowed:
+        # Byte-equivalent spellings count as declared ('4194304' == '4M').
+        allowed_keys = {_size_key(a) for a in allowed}
+        if _size_key(value) not in allowed_keys:
             raise ValueError(
                 f"{section}.{key}={value!r} is outside the declared search "
                 f"space {allowed}")
