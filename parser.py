@@ -52,6 +52,15 @@ _GENERIC = re.compile(
     re.IGNORECASE,
 )
 
+# Darshan-derived (fitness v2): emitted by benchmarks/generic/measure.sh
+# --strategy darshan from the profiled io_only_time. Deliberately phrased
+# WITHOUT the words "write"/"read" so _GENERIC cannot also capture it:
+#   "aggregate io-only bandwidth: 1.87 GiB/s"
+_IO_ONLY = re.compile(
+    r"\bio-only\b[^0-9\n]{0,40}([0-9][0-9.,]*)\s*([KMGT]?i?B)\s*/\s*s(ec)?\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 @dataclass
 class Throughput:
@@ -61,6 +70,7 @@ class Throughput:
     max_read: Optional[float] = None
     mean_write: Optional[float] = None
     mean_read: Optional[float] = None
+    io_only_write: Optional[float] = None   # darshan io_only-time based (v2)
     source: str = ""          # "ior" | "generic" | ""
 
     def best(self, prefer: str = "max") -> tuple:
@@ -89,6 +99,12 @@ def parse_throughput(text: str) -> Throughput:
     """Extract write/read MiB/sec from a benchmark stdout blob."""
     tp = Throughput()
     matched_ior = False
+
+    for value, unit, _ in _IO_ONLY.findall(text):
+        mibs = _to_mib(value, unit)
+        if mibs is not None:
+            tp.io_only_write = (mibs if tp.io_only_write is None
+                                else max(tp.io_only_write, mibs))
 
     for stat, op, value, unit in _IOR_LINE.findall(text):
         mibs = _to_mib(value, unit)
@@ -280,6 +296,16 @@ def parse_rep_throughputs(text: str, prefer: str = "max") -> list:
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
         samples.append(parse_throughput(text[m.end():end]).best(prefer))
     return samples
+
+
+def parse_rep_io_only(text: str) -> list:
+    """Per-repetition darshan io-only bandwidth (MiB/sec), same rep
+    markers as parse_rep_throughputs; None where the rep has no value."""
+    marks = list(REP_MARKER.finditer(text))
+    if not marks:
+        return [parse_throughput(text).io_only_write]
+    return [parse_throughput(text[m.end():(marks[i + 1].start() if i + 1 < len(marks) else len(text))]).io_only_write
+            for i, m in enumerate(marks)]
 
 
 def mean_std(values: list) -> tuple:

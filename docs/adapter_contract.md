@@ -33,10 +33,11 @@ profiles:
 Templates expand `{repo}`, `{data_dir}`, `{ntasks}` — no other `{}` in
 these strings (they pass through `str.format`).
 
-The **only fitness interface** is one line, by any means:
+The **fitness interfaces** are single lines, produced by any means:
 
 ```
-aggregate write bandwidth: <X> GiB/s
+aggregate write bandwidth:   <X> GiB/s     (v1: app/filesystem)
+aggregate io-only bandwidth: <X> GiB/s     (v2: Darshan, when wrapped)
 ```
 
 ## Measurement strategies (onboarding ladder)
@@ -52,10 +53,16 @@ Pick by how little the application needs to change — the goal is *zero*:
 3. **`jsonl`** — app emits JSON-lines metrics with numeric payload/time
    fields (`--bytes-key`, `--seconds-key`, `--file` configurable;
    defaults match pio-bench). Most precise: app-measured I/O time only.
-4. **`darshan`** *(planned, fitness v2)* — wrap the binary with
-   `darshan-runtime` (already in the image recipe); score `io_only_bw`
-   from the Darshan log. Truly universal: per-API bytes and timing
-   without the app knowing anything.
+4. **`darshan`** *(fitness v2)* — the rank process is wrapped with
+   `darshan-runtime` (in the image since the 3.5.0 def block); per-rank
+   logs are collected in `<rep>/darshan_logs/` (run.sh pins
+   `DARSHAN_LOGPATH`), and `measure.sh --strategy darshan` scores
+   `SUM(cumulative_bytes_written) / MAX(io_only_time)` as
+   `aggregate io-only bandwidth` — bytes additive over ranks, wall set by
+   the slowest rank (the bottleneck hint tuning exists to fix). Requires
+   nothing from the app; works even for binaries that misreport their own
+   I/O. `fitness.metric: app|io_only|auto` selects the scored series;
+   both are always recorded (see `metric_version` in the ledger).
 
 Never score on `max`; repetitions are averaged (see `fitness:` — the
 shared-Lustre rule).

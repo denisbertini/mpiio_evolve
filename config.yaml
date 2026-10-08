@@ -156,6 +156,20 @@ benchmark:
       setup_script: "bash {repo}/benchmarks/generic/setup.sh {data_dir}"
       measure_script: "bash {repo}/benchmarks/generic/measure.sh --strategy jsonl {data_dir}"
 
+    pio_bench_darshan:
+      # FITNESS v2 variant (requires the image rebuilt WITH darshan 3.5.0):
+      # same workload, wrapped rank-process is instrumented by Darshan, so
+      # fitness can be scored on profiler-measured io_only bandwidth --
+      # independent of what the app chooses to report, per-rank resolved,
+      # and eventually with aggregator-topology/OST attribution from the
+      # same logs. Emits BOTH rate lines; fitness.metric decides (auto =
+      # io-only when present). Cross-check on first runs: Darshan
+      # cumulative bytes ~ app bytes (layers may double-count MPI-IO vs
+      # POSIX -- verify the ratio before trusting absolute v2 numbers).
+      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} -- darshan-runtime pio_bench --backend mpiio --local 96 --particles 250000 --steps 5 --interval 1"
+      setup_script: "bash {repo}/benchmarks/generic/setup.sh {data_dir}"
+      measure_script: "bash {repo}/benchmarks/generic/measure.sh --strategy darshan {data_dir}"
+
 # =============================================================================
 # SEARCH SPACE - boundaries handed to the LLM mutation prompt
 # =============================================================================
@@ -211,6 +225,15 @@ search_space:
 # FITNESS SHAPING
 # =============================================================================
 fitness:
+  # ---- Metric source -------------------------------------------------------
+  #   app     : score the rates the benchmark itself reports (v1)
+  #   io_only : score Darshan's profiler-measured io-only bandwidth (v2;
+  #             needs the pio_bench_darshan profile + image with darshan)
+  #   auto    : io_only when the run produced Darshan values, else app.
+  # Both series are ALWAYS recorded in the ledger (io_only_mean_mib_sec,
+  # scored_metric, metric_version), so switching is auditable after the
+  # fact -- never a silent fitness redefinition.
+  metric: "app"
   # ---- Statistics: physics-style N-fold measurement --------------------------
   # One benchmark pass on a shared Lustre is an anecdote. Every candidate is
   # measured `repetitions` times; the score is computed on the ARITHMETIC MEAN

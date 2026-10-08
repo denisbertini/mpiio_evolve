@@ -54,7 +54,7 @@ from infrastructure import (
     ROMIO_HINTS_FILE,
     ensure_inside,
 )
-from parser import (ErrorReport, mean_std, parse_log_files,
+from parser import (ErrorReport, mean_std, parse_log_files, parse_rep_io_only,
                   parse_rep_throughputs, profile_errors, read_log)
 from slurm_launcher import SlurmLauncher, SlurmResources
 
@@ -338,6 +338,9 @@ def evaluate(candidate: Mapping[str, Any],
     repeat_mode = str(fit_cfg.get("repeat_mode", "in_job"))
     w_mean = w_std = r_mean = r_std = None
     n_w = n_r = 0
+    io_mean = io_std = None
+    n_io = 0
+    scored_metric = "app"
 
     try:
         # -- 1. validate ------------------------------------------------------
@@ -394,6 +397,11 @@ def evaluate(candidate: Mapping[str, Any],
             cfg["search_space"].get("env_prefix_allowlist"),
             home_subdir=str(ws_cfg.get("home_subdir", ".fake_home")),
         )
+        if container:
+            # Absolute SIF path for host-side measure scripts: the compute
+            # nodes may lack darshan-parser on PATH, but the image has it
+            # (measure.sh --strategy darshan falls back to it).
+            env["MPIIO_EVOLVE_SIF"] = str(container.split()[-1])
 
         # -- 4. compile + submit --------------------------------------------------
         prof_cmd, prof = _resolve_profile(cfg, cand)
@@ -452,6 +460,7 @@ def evaluate(candidate: Mapping[str, Any],
         #                  contention drift -- the honest estimator)
         if repeat_mode == "across_jobs":
             samples, stderr_parts, exit_codes = [], [], []
+            io_samples = []
             res_k = None
             for k in range(1, reps + 1):
                 rdir = run_dir / f"rep{k}"
@@ -466,6 +475,7 @@ def evaluate(candidate: Mapping[str, Any],
                 tp_k, err_k, _ = parse_log_files(res_k.stdout_path,
                                                  res_k.stderr_path)
                 samples.append(tp_k.best(prefer))
+                io_samples.append(tp_k.io_only_write)
                 stderr_parts.append(err_k)
                 exit_codes.append(res_k.exit_code)
             result = res_k
@@ -480,7 +490,9 @@ def evaluate(candidate: Mapping[str, Any],
             if result.simulated:
                 (run_dir / "stdout.log").write_text(
                     _synthetic_multirep(io_cfg, ntasks, reps), encoding="utf-8")
-            samples = parse_rep_throughputs(read_log(result.stdout_path), prefer)
+            log_text = read_log(result.stdout_path)
+            samples = parse_rep_throughputs(log_text, prefer)
+            io_samples = parse_rep_io_only(log_text)
             stderr_text = read_log(result.stderr_path)
             exit_code = result.exit_code
 
@@ -488,6 +500,7 @@ def evaluate(candidate: Mapping[str, Any],
         # Score on the MEAN; the error bar is reported, never maximized away.
         w_mean, w_std, n_w = mean_std([w for (w, _r) in samples])
         r_mean, r_std, n_r = mean_std([r for (_w, r) in samples])
+        io_mean, io_std, n_io = mean_std(io_samples)
         no_data = w_mean is None and r_mean is None
 
         report: ErrorReport = profile_errors(
@@ -496,7 +509,19 @@ def evaluate(candidate: Mapping[str, Any],
             feedback = report.feedback
             (run_dir / "feedback.txt").write_text(report.feedback, encoding="utf-8")
 
-        score = _score(w_mean, r_mean, exit_code, fit_cfg)
+        # Fitness metric source (v1 = app-reported rates, v2 = darshan
+        # io-only). "auto" scores io-only when the job produced darshan
+        # values, else app; io-only lines never pollute the app rate
+        # (parser keeps them apart by phrasing).
+        metric_pref = str(fit_cfg.get("metric", "app")).lower()
+        if metric_pref in ("io_only", "auto") and io_mean is not None:
+            scored_metric = "io_only"
+        elif metric_pref == "io_only":
+            logger.warning("fitness.metric=io_only but the log carries no "
+                           "io-only values (wrapped profile? image with "
+                           "darshan?); scoring app-reported")
+        score_w = io_mean if scored_metric == "io_only" else w_mean
+        score = _score(score_w, r_mean, exit_code, fit_cfg)
 
     except Exception as exc:                                  # noqa: BLE001
         logger.exception("candidate evaluation aborted")
@@ -527,6 +552,12 @@ def evaluate(candidate: Mapping[str, Any],
         "n_repetitions": float(reps),
         "n_write_samples": float(n_w),
         "n_read_samples": float(n_r),
+        "io_only_mean_mib_sec": float(io_mean) if io_mean is not None else 0.0,
+        "io_only_std_mib_sec": float(io_std) if io_std is not None else 0.0,
+        "io_only_sem_mib_sec": (float(io_std) / (n_io ** 0.5)) if (io_std and n_io > 1) else 0.0,
+        "n_io_samples": float(n_io),
+        "scored_metric": scored_metric,
+        "metric_version": 2 if scored_metric == "io_only" else 1,
         "job_exit_code": float(exit_code),
         "runtime_sec": round(time.monotonic() - started, 3),
     }

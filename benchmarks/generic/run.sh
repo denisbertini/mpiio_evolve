@@ -40,6 +40,14 @@ cd "$RUN_DIR" 2>/dev/null || {
     exit 2
 }
 
+# Darshan wrap support (fitness v2): when the profile command starts with
+# darshan-runtime, logs must land inside the rep dir where measure.sh looks
+# for them (def configures the runtime with --with-log-path-by-env=
+# DARSHAN_LOGPATH). Harmless for unwrapped apps; mkdir -p is race-safe
+# across ranks on the same node.
+export DARSHAN_LOGPATH="${DARSHAN_LOGPATH:-$RUN_DIR/darshan_logs}"
+mkdir -p "$DARSHAN_LOGPATH" 2>/dev/null || true
+
 # First word must be executable inside the container.
 command -v "$1" >/dev/null 2>&1 || [ -x "$1" ] || {
     echo "run.sh: '$1' not found/not executable in container" >&2
