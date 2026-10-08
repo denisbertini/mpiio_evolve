@@ -6,7 +6,9 @@ LLM in the loop.**
 An [OpenEvolve](https://github.com/codelion/openevolve) controller runs
 confined on a Slurm login node (inside `controller.sif`), mutates *I/O
 configuration candidates* (Lustre striping, ROMIO hints, OMPIO MCA variables),
-submits a real benchmark (EPOCH 3D) to the cluster, measures achieved MiB/sec,
+submits real benchmark jobs to the cluster (pluggable profiles: the
+purpose-built `pio_bench` instrument, EPOCH 3D, or any user I/O app via the
+[adapter contract](docs/adapter_contract.md)), measures achieved MiB/sec,
 and feeds numbers plus classified failure text back to an OpenAI-compatible
 LLM endpoint. The unit of evolution is **configuration, not code** — every
 candidate is a small JSON that must stay inside the search space declared in

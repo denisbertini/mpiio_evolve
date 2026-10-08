@@ -523,6 +523,32 @@ yum install -y lustre-client lustre-client-devel
   ln -s warpx.3d.MPI.OMP.DP.PDP.OPMD.QED warpx_3d 
   ln -s warpx.rz.MPI.OMP.DP.PDP.OPMD.QED warpx_rz
 
+  #
+  # pio-bench: purpose-built MPI-IO/HDF5/ADIOS2 checkpoint instrument
+  # (fitness instrument of mpiio_evolve, https://github.com/denisbertini/pio-bench).
+  # PINNED BY TAG on purpose: the fitness instrument must be frozen per
+  # campaign; bump deliberately, never implicitly. Requires v0.2.1+
+  # (ROMIO-info pass-through: candidate ROMIO_HINTS must not be overridden;
+  # tag must exist before this build runs).
+  #
+  export PIO_BENCH_VERSION=v0.2.1
+  echo "Installing pio-bench version: " $PIO_BENCH_VERSION
+  rm -rf /tmp/piobench
+  git clone --depth 1 --branch $PIO_BENCH_VERSION https://github.com/denisbertini/pio-bench.git /tmp/piobench
+  cd /tmp/piobench
+  # A backend silently compiled OUT (missing lib, MPI-less ADIOS2) would
+  # distort fitness invisibly -- grep the configure log and FAIL the image
+  # build instead of shipping a crippled instrument.
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release | tee /tmp/piobench-configure.log
+  grep -q "pio_bench: HDF5 backend ON"   /tmp/piobench-configure.log || { echo "FATAL: pio-bench built WITHOUT hdf5 backend"; exit 1; }
+  grep -q "pio_bench: ADIOS2 backend ON" /tmp/piobench-configure.log || { echo "FATAL: pio-bench built WITHOUT adios2 backend (needs cxx_mpi, cf. ADIOS2_USE_MPI=ON above)"; exit 1; }
+  cmake --build build -j$(nproc)
+  cmake --install build    # -> /usr/local/bin/pio_bench
+  # In-image self-test gate: every backend must actually run + verify.
+  # (Login-node scale; catches link/runtime breakage at BUILD time.)
+  cd /tmp/piobench && MPIRUN="mpirun --allow-run-as-root" ./scripts/smoke.sh
+  rm -rf /tmp/piobench
+
 
 
 %runscript

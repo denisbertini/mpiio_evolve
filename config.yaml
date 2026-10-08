@@ -108,11 +108,12 @@ container:
   mpi_mode: "srun_direct"
 
 benchmark:
-  # Active profile -> REAL-APPLICATION fitness (EPOCH 3D LWFA checkpoints).
-  # A candidate may override with {"benchmark_profile": "<name>"}.
-  # (The former "ior_canary" probe is retired from the test suite -- IOR is
-  # still installed in the image for manual Lustre health checks.)
-  active: "epoch_io"
+  # Active profile -> fitness instrument for the NEXT campaign: pio-bench,
+  # the purpose-built MPI-IO/HDF5/ADIOS2 checkpoint instrument (github:
+  # denisbertini/pio-bench, tag-pinned inside the plasma image, ROMIO-info
+  # pass-through since v0.2.1). Switch back to "epoch_io" any time; a
+  # candidate may also override with {"benchmark_profile": "<name>"}.
+  active: "pio_bench"
   # ntasks defaults to cluster.nodes * cluster.tasks_per_node. When set, it
   # is folded into the #SBATCH --ntasks-per-node header (must be divisible by
   # cluster.nodes), because the allocation -- not srun -- owns the rank count.
@@ -138,6 +139,22 @@ benchmark:
       # coordination anywhere). Sums *.sdf bytes / wall time, layout-agnostic
       # (single shared collective-buffered file or per-rank SDFs).
       measure_script: "bash {repo}/benchmarks/epoch_io/measure.sh {data_dir}"
+
+    pio_bench:
+      # Purpose-built checkpoint instrument, pure MPI-IO backend: one
+      # merged .bin per checkpoint (field hyperslabs + particle records),
+      # exactly the ROMIO+Lustre path the candidates tune. The harness
+      # injects the candidate as ROMIO_HINTS (env) + lfs setstripe (data
+      # dir); pio-bench >= v0.2.1 passes an EMPTY MPI_Info so those hints
+      # actually apply -- no per-candidate flags, no recompile, ever.
+      # Workload (fixed, instrumented): 96^3 field + 250k particles/rank,
+      # 5 checkpoints/rep -> ~0.7 GiB per checkpoint at 32 ranks.
+      # Fitness feed: pio_metrics.jsonl (bytes/seconds per checkpoint);
+      # --verify stays OFF in fitness runs (verification reads would
+      # pollute the measured window; smoke.sh owns correctness).
+      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} pio_bench --backend mpiio --local 96 --particles 250000 --steps 5 --interval 1"
+      setup_script: "bash {repo}/benchmarks/generic/setup.sh {data_dir}"
+      measure_script: "bash {repo}/benchmarks/generic/measure.sh --strategy jsonl {data_dir}"
 
 # =============================================================================
 # SEARCH SPACE - boundaries handed to the LLM mutation prompt
