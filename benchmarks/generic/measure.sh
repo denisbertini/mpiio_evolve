@@ -141,10 +141,13 @@ darshan)
         echo "  image built with darshan-runtime? (fitness v2 requirement)" >&2
         exit 1
     fi
-    if command -v darshan-parser >/dev/null 2>&1; then
-        PARSER=(darshan-parser)
-    elif [ -n "${MPIIO_EVOLVE_SIF:-}" ] && command -v apptainer >/dev/null 2>&1; then
+    # Parser resolution: the IMAGE parser is preferred when known, because
+    # it is guaranteed to match the runtime version that wrote the logs;
+    # a host parser may predate the log format. PATH parser = fallback.
+    if [ -n "${MPIIO_EVOLVE_SIF:-}" ] && command -v apptainer >/dev/null 2>&1; then
         PARSER=(apptainer exec "$MPIIO_EVOLVE_SIF" darshan-parser)
+    elif command -v darshan-parser >/dev/null 2>&1; then
+        PARSER=(darshan-parser)
     else
         echo "generic[darshan]: darshan-parser not on PATH and MPIIO_EVOLVE_SIF unusable" >&2
         exit 1
