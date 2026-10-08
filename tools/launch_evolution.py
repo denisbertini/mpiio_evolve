@@ -60,7 +60,24 @@ kwargs = dict(initial_program_path=INITIAL, evaluation_file=EVALUATOR)
 params = inspect.signature(OpenEvolve.__init__).parameters
 if "config" in params:                       # openevolve >= 0.4
     from openevolve.config import load_config
-    kwargs["config"] = load_config(CONFIG)
+    cfg = load_config(CONFIG)
+
+    # Site handbook injection: docs/knowledge/mpiio_lustre.md is appended to
+    # the system message verbatim -- curated, status-tagged domain knowledge
+    # (the whole relevant corpus is ~2 KB, so it goes in WHOLESALE; a vector
+    # store over a dozen knobs would only add retrieval noise).  Edit the .md
+    # to teach the mutator; disable with MPIIO_EVOLVE_KNOWLEDGE=0.
+    kb_path = REPO / "docs" / "knowledge" / "mpiio_lustre.md"
+    if os.environ.get("MPIIO_EVOLVE_KNOWLEDGE", "1") != "0" and kb_path.is_file():
+        handbook = kb_path.read_text(encoding="utf-8")
+        banner = ("\n\n=== SITE HANDBOOK (curated, status-tagged; [verified] "
+                  "facts outrank [textbook] ones) ===\n")
+        target = cfg.prompt if hasattr(cfg, "prompt") else cfg
+        target.system_message = (target.system_message or "") + banner + handbook
+        print(f"mpiio_evolve: site handbook injected "
+              f"({len(handbook)} chars from {kb_path.relative_to(REPO)})")
+
+    kwargs["config"] = cfg
     if "output_dir" in params:
         kwargs["output_dir"] = OUTPUT
 else:                                        # older releases
