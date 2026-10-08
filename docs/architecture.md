@@ -72,14 +72,22 @@ explicit bind — `mungepath` inactive on this cluster) and the cluster SPANK
 plugin (ro). `$HOME` and the rest of `/lustre` are invisible; submitted jobs
 run entirely outside it. Consequences encoded in code: `MPIIO_EVOLVE_ROOT` is
 pinned into the state dir; the `lfs`-probe is skipped inside the container
-(`lustre_strict: false` → hints-only tuning; run the bare-metal controller to
-evolve striping).
+(`lustre_strict: false` on hosts without `lfs` → hints-only tuning; the
+runner binds the host `lfs` when present → striping evolved from the
+container).
 
 **MPI-IO component subtlety (plasma image):** `%environment` sets
 `OMPI_MCA_io=romio341` — Open MPI 5.x with the **embedded ROMIO** component,
-so ROMIO hint files (`MPIIO_HINTS`) are the primary tuning surface.
-`evaluate.py` probes the image once per session; `"mpi_engine": "ompio"`
-exports `OMPI_MCA_io=ompio` to switch surfaces.
+so ROMIO hint files (`MPIIO_HINTS`) are the primary tuning surface. That
+ROMIO is Lustre-aware (AD-IO-Lustre linked: `romio_lustre_start_iodevice` +
+`liblustreapi.so.1`, verified 2026-10-08): it auto-detects the stripe layout
+at `MPI_File_open` and sizes collective buffering to it — an explicit
+`cb_nodes` overrides the auto-alignment, exactly the axis the search
+explores against `lustre.*` (applied via `lfs setstripe`, host-client
+passthrough). `evaluate.py` probes the image once per session;
+`"mpi_engine": "ompio"` exports `OMPI_MCA_io=ompio` to switch surfaces
+(there the `MCA fs:lustre` component takes over layout duties, with
+`fs_lustre_stripe_size/width` as extra override knobs).
 
 **LLM quirks handled by the launcher:** thinking/reasoning models consume the
 whole `max_tokens` before answering → `chat_template_kwargs.enable_thinking=

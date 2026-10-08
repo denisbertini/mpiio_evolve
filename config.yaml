@@ -163,10 +163,18 @@ search_space:
     # storms, hours-vs-minutes). The optimizer must never see it.
     romio_ds_write:  ["automatic", "enable"]
     no_io_anchors:   [null, true]
-    # striping_count / striping_unit / direct_io intentionally absent:
-    # this ROMIO sees Lustre as UFS, so they parse but never execute --
-    # dead keys would only dilute the search. Striping lives in lustre.*
-    # (lfs setstripe), which works.
+    # striping_count / striping_unit / direct_io kept OUT of the search on
+    # purpose -- NOT because they are dead: verified 2026-10-08 that this
+    # libmpi.so carries ROMIO's AD-IO-Lustre backend (romio_lustre_start_
+    # iodevice + liblustreapi.so.1; plus the MCA fs:lustre component), so
+    # these hints WOULD really move file layout.  But striping lives in
+    # lustre.* (lfs setstripe) as the single actuator -- two independent
+    # paths setting the same layout would confound every measurement.
+    # Consequence of the live AD backend: ROMIO auto-detects the stripe
+    # layout at MPI_File_open and sizes collective buffering to it; an
+    # explicit cb_nodes OVERRIDES that auto-alignment -> the optimizer
+    # explores matched (cb_nodes ~ stripe_count), mismatched, and
+    # automatic regimes.
 
   ompio:
     # Keys become OMPI_MCA_io_ompio_<key> environment variables (Open MPI 4.x).
