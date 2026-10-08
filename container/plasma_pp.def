@@ -384,18 +384,21 @@ yum install -y lustre-client lustre-client-devel
   # + mpiio_evolve fitness source: pure-I/O time, aggregator topology,
   #   Lustre OST attribution (lustre + dxt modules, both default-on;
   #   dxt tracing itself is activated per-job via DXT_ENABLE_IO_TRACE=1).
-  # NOTE: 3.4.7 is the LATEST RELEASE TAG (verified via GitHub); the
-  # "3.5.0" seen in the online docs is unreleased master -- do not chase.
+  # NOTE: release tagging changed with 3.5.0 -- older tags carry the
+  # 'darshan-' prefix (darshan-3.4.7), 3.5.0+ are tagged PLAIN (see
+  # github releases); checkout must use the bare version.
+  # 3.5.0 relevant changes: mmap logs default-ON; job_stats/file_stats gain
+  # "I/O bandwidth by slowest rank" + "I/O time by slowest" (fitness v2).
   #
-   export DARSHAN_VERSION=3.4.7
+   export DARSHAN_VERSION=3.5.0
    echo "Installing Darshan version: " $DARSHAN_VERSION
    dnf install -y zlib-devel
    rm -rf /opt/darshan
    cd /opt
    git clone https://github.com/darshan-hpc/darshan.git
    cd /opt/darshan
-   git checkout darshan-$DARSHAN_VERSION
-   git submodule update --init
+   git checkout $DARSHAN_VERSION
+   git submodule update --init --recursive
    ./prepare.sh
    # runtime (LD_PRELOAD instrumentation). No --enable-apmpi-mod: that
    # module requires Argonne Performance MPI headers, absent here.
