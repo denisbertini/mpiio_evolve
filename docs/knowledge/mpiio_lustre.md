@@ -16,6 +16,12 @@ generic AI/web text is only admitted after correction below.
   writers per OST. `[textbook, direction verified here]`
 - `cb_config_list` = pin WHICH hosts aggregate. NOT in the search space —
   proposing it wastes an iteration (rejected pre-submission). `[site rule]`
+- `cray_cb_nodes_multiplier` = Cray-MPT-only vendor knob; does not exist in
+  this Open MPI romio341 build. Never propose. `[site rule, wrong-stack]`
+- Generic advice that "`*:1` maximizes PCIe bandwidth" is site-inverted:
+  `*:1` is the factory default here and precisely WHY collective buffering
+  starts essentially off (one aggregator). `[verified, generic claim
+  rejected]`
 - Turning `romio_cb_write=enable` was measured +6-8% over baseline
   (cb_nodes 8-16 family). `[verified 2026-10]`
 
@@ -26,7 +32,8 @@ generic AI/web text is only admitted after correction below.
   often quoted by generic sources. `[verified in source; generic claim
   corrected]`
 - Aligning it with the Lustre stripe size avoids partial-stripe writes:
-  buffer >= stripe_size per aggregator is the heuristic. `[textbook]`
+  buffer >= stripe_size per aggregator is the heuristic; an exact MULTIPLE
+  of the stripe size flushes complete stripe writes. `[textbook]`
 
 ## 3 · Lustre-specific ROMIO hints — deliberately EXCLUDED
 
@@ -48,6 +55,16 @@ generic AI/web text is only admitted after correction below.
 
 - `stripe_count` sets how many OSTs a file fans across; `cb_nodes` sets how
   many aggregator processes write it. `[mechanism]`
+- WHY the diagonal works (ROMIO design): on Lustre, ROMIO's driver routes
+  aggregators to DISTINCT OSTs and skips the generic block-alignment trick,
+  so one aggregator per OST means no two writers ever contend the same
+  OST's distributed lock. `cb_nodes >> stripe_count` therefore means shared
+  OST locks -- contention, RMW amplification. `[textbook, ROMIO design]`
+- If ROMIO's runtime Lustre detection engages (see §3 open question),
+  `cb_nodes` DEFAULTS to the stripe count -- `automatic` would then be
+  born-aligned and explicit values only matter to deviate deliberately.
+  Until the functional test settles it, do not assume auto-alignment.
+  `[textbook, conditional, unresolved here]`
 - `cb_nodes ≈ stripe_count` → one aggregator per OST, full-width streams.
   `cb_nodes << stripe_count` → each aggregator scatters across OSTs
   (fragmented partial writes). `cb_nodes >> stripe_count` → aggregators
