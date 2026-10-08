@@ -338,7 +338,12 @@ yum install -y lustre-client lustre-client-devel
   git checkout v$ADIOS_VERSION
   mkdir adios2-build
   cd adios2-build
-  cmake ../ -DCMAKE_PREFIX_INSTALL=/usr/local/ -DADIOS2_BUILD_EXAMPLES=OFF -DADIOS2_BUILD_TESTING=OFF -DADIOS2_USE_Fortran=ON -DADIOS2_USE_HDF5=OFF -DCMAKE_CXX_FLAGS=-fPIC 
+  # NOTE: ADIOS2_USE_MPI must be requested EXPLICITLY. Without it the
+  # build silently produces a serial-only ADIOS2 (no MPI_Comm anywhere in
+  # the C++ API) which cannot merge multi-rank output -- discovered the
+  # hard way via pio-bench. With MPI installed earlier in this %post,
+  # ON either wires it up or fails the build loudly. Good.
+  cmake ../ -DCMAKE_PREFIX_INSTALL=/usr/local/ -DADIOS2_BUILD_EXAMPLES=OFF -DADIOS2_BUILD_TESTING=OFF -DADIOS2_USE_Fortran=ON -DADIOS2_USE_HDF5=OFF -DADIOS2_USE_MPI=ON -DCMAKE_CXX_FLAGS=-fPIC
   make -j$(nproc)
   make -j$(nproc) install  
   rm -rf /tmp/adios
