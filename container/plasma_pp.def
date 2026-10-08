@@ -380,6 +380,47 @@ yum install -y lustre-client lustre-client-devel
 
 
   #
+  # Darshan I/O profiler (instrumentation runtime + parser util)
+  # + mpiio_evolve fitness source: pure-I/O time, aggregator topology,
+  #   Lustre OST attribution (lustre + dxt modules, both default-on;
+  #   dxt tracing itself is activated per-job via DXT_ENABLE_IO_TRACE=1).
+  # NOTE: 3.4.7 is the LATEST RELEASE TAG (verified via GitHub); the
+  # "3.5.0" seen in the online docs is unreleased master -- do not chase.
+  #
+   export DARSHAN_VERSION=3.4.7
+   echo "Installing Darshan version: " $DARSHAN_VERSION
+   dnf install -y zlib-devel
+   rm -rf /opt/darshan
+   cd /opt
+   git clone https://github.com/darshan-hpc/darshan.git
+   cd /opt/darshan
+   git checkout darshan-$DARSHAN_VERSION
+   git submodule update --init
+   ./prepare.sh
+   # runtime (LD_PRELOAD instrumentation). No --enable-apmpi-mod: that
+   # module requires Argonne Performance MPI headers, absent here.
+   cd /opt/darshan/darshan-runtime
+   ./configure --prefix=/usr/local --with-mem-align=8 \
+     --with-log-path-by-env=DARSHAN_LOGPATH --with-jobid-env=SLURM_JOBID \
+     --enable-hdf5-mod --with-hdf5=/usr/local \
+     --enable-mmap-logs --enable-cuserid CC=mpicc
+   make -j$(nproc)
+   make -j$(nproc) install
+   # util (log parsers: darshan-parser, darshan-dxt-parser, ...)
+   cd /opt/darshan/darshan-util
+   ./configure
+   make -j$(nproc)
+   make -j$(nproc) install
+   rm -rf /opt/darshan
+
+   # PyDarshan: python log analysis (used for metric extraction).
+   python3 -m pip --no-cache-dir install darshan
+   # Analysis-workbench tools (Drishti / DXT-Explorer pull Qt & plot
+   # stacks): they belong on the controller/workstation, NOT the compute
+   # image -- install there if interactive I/O forensics are wanted:
+   #   python3 -m pip install recorder-utils drishti-io dxt-explorer
+
+   #
   # OSU microbenchmarks
   #
  
