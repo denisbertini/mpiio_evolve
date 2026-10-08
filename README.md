@@ -164,7 +164,7 @@ every experiment it ever ran.**
 | `config.yaml` | `cluster.account`, `cluster.partition` | where jobs run |
 | | `fitness.repetitions` (3) / `repeat_mode` | statistical confidence per candidate |
 | | `search_space.*` | what the LLM may legally mutate |
-| | `workspace.lustre_strict` | `true` = require `lfs` (bare-metal controller); container runs are hints-only → `false` |
+| | `workspace.lustre_strict` | `true` = require `lfs` → striping is evolved (container runner binds the host `lfs` read-only; hosts without `lfs` need `false` = hints-only) |
 | | `cluster.time_limit` | damage cap per evaluation |
 | `openevolve_config.yaml` | `max_iterations` (40) | campaign length |
 | | `llm.api_base`, `llm.models`, `max_tokens` | the endpoint (keep `max_tokens ≥ 8192` for thinking models, or thinking off via launcher) |

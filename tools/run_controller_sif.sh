@@ -4,8 +4,9 @@
 #
 # The image (container/controller.def -> images/controller.sif) carries
 # OpenEvolve (+ its full pinned dependency tree) + a version-matched Slurm
-# client.  No Lustre client: set workspace.lustre_strict: false to tune
-# MPI-IO hints from the container (see container/controller.def %help).
+# client.  The Lustre client is a HOST-kernel service: this script binds the
+# host 'lfs' + libs read-only when present, enabling 'lfs setstripe' inside
+# the wall (workspace.lustre_strict: true); without it, runs are hints-only.
 # With --contain the
 # container sees ONLY:
 #   * ppio_tune          rw   same path  (all mutable state)
@@ -102,6 +103,23 @@ fi
 # unless the .so is bound read-only, same pattern as the munge socket.
 if [[ -e /usr/libexec/slurm-singularity-exec.so ]]; then
     APPTAINER_BINDPATH="$APPTAINER_BINDPATH,/usr/libexec/slurm-singularity-exec.so:/usr/libexec/slurm-singularity-exec.so:ro"
+fi
+
+# Lustre passthrough: 'lfs' is only an ioctl frontend to the HOST kernel's
+# Lustre client (which the container shares), so binding the host binary and
+# its two non-glibc libraries read-only makes 'lfs setstripe' work INSIDE the
+# confinement wall -- proven on ccdev0002 (setstripe -c 4 -S 1M round-trip
+# via getstripe, lfs 2.15.8).  Striping can then be evolved from the
+# container (workspace.lustre_strict: true); every setstripe still passes
+# ensure_inside() and only ever touches freshly created files under $STATE.
+# Hosts without lfs skip this silently -> evaluator degrades to hints-only.
+if [[ -x /usr/bin/lfs ]]; then
+    APPTAINER_BINDPATH="$APPTAINER_BINDPATH,/usr/bin/lfs:/usr/bin/lfs:ro"
+    # everything lfs links except the glibc/core set the image already has
+    while read -r lib; do
+        [[ -e "$lib" ]] && APPTAINER_BINDPATH="$APPTAINER_BINDPATH,$lib:$lib:ro"
+    done < <(ldd /usr/bin/lfs 2>/dev/null | awk '/=> \//{print $3}' \
+             | grep -vE '/ld-linux|libc\.so|libpthread\.so|libdl\.so|librt\.so|libm\.so|libresolv\.so|libcrypt\.so|libnsl\.so|libselinux|libsepol|libpcre')
 fi
 
 echo "mpiio_evolve CONTAINER controller"

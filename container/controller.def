@@ -24,14 +24,15 @@ From: rockylinux/rockylinux:9.7
     the rest of /lustre are invisible.  Benchmark jobs themselves run
     OUTSIDE this container (unchanged plasma_pp.sif path on compute nodes).
 
-    NO Lustre client here, on purpose: the kernel client lives on the
-    host only and the userspace lfs adds nothing inside this image.
-    Consequence: stripe_count/stripe_size mutations cannot be applied
-    from the container.  Either run the bare-metal controller
-    (tools/run_controller.sh on the login node, host lfs) when striping
-    is part of the search, or set  workspace.lustre_strict: false  in
-    config.yaml to deliberately tune MPI-IO hints only.  Without that,
-    evaluate.py refuses real runs with a clear error (by design).
+    No Lustre CLIENT inside this image (no kernel module, none needed): the
+    Lustre client is a HOST-kernel service the container shares, so
+    tools/run_controller_sif.sh binds the host 'lfs' binary and its two
+    non-glibc libraries (liblustreapi, liblnetconfig) read-only -- proven on
+    ccdev0002: 'lfs setstripe -c 4 -S 1M' round-trips inside the confined
+    container.  With that passthrough, stripe_count/stripe_size ARE evolved
+    from the container (workspace.lustre_strict: true).  On hosts without
+    lfs the bind is skipped and evaluate.py refuses real runs under strict
+    mode (by design) -- or set lustre_strict: false to tune hints only.
 
     BUILD: the Slurm client defaults to the cluster version 26.05.4 and
     must otherwise MATCH the cluster ('sbatch --version' on the login
