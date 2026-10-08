@@ -93,6 +93,19 @@ prompt:
     stripe_size >= the per-aggregator chunk (cb_buffer_size); data-sieving
     hurts when per-rank strided extents are large and contiguous.
 
+    THE TWO SECTIONS ARE PHYSICALLY COUPLED: stripe_count sets how many OSTs
+    a dump file fans across; cb_nodes sets how many aggregator processes
+    write it. Align them -- cb_nodes ~= stripe_count gives one aggregator per
+    OST (full-width streams); cb_nodes << stripe_count scatters each
+    aggregator over several OSTs (fragmented partial writes), cb_nodes >>
+    stripe_count collides several aggregators per OST (RPC pile-up and
+    read-modify-write amplification). Try matched, mismatched and automatic
+    deliberately -- they are different hypotheses, not noise. Note that
+    lustre.* values are NOW REALLY APPLIED per evaluation via lfs setstripe
+    (since 2026-10-08; earlier campaigns silently skipped them): treat
+    stripe_count/stripe_size as live levers and evaluate stripe changes with
+    the same seriousness as romio hints.
+
     Site-verified facts (do not re-derive): ROMIO on this stack reports
     filesystem_type=UFS (its Lustre auto-detection misses this client), so
     romio's own striping_* and direct_io hints are PARSED BUT INERT -- all
