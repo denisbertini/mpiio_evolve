@@ -215,7 +215,8 @@ search_space:
 
   ompio:
     # Keys become OMPI_MCA_io_ompio_<key> environment variables (Open MPI 4.x).
-    num_aggregators:        [0, 1, 2, 4, 8, 16, 32]     # 0 = auto-select
+    num_aggregators:        [-1, 1, 2, 4, 8, 16, 32]    # -1 = auto-select (MCA default)
+    bytes_per_agg:          ["1M", "4M", "16M", "64M"]  # == cb_buffer_size hint
     jobs_per_aggregator:    [1, "auto", 2, 4, 8]
     io_stripe_size:         ["1M", "4M", "8M", "16M"]
     fb_data_size:           ["64K", "256K", "1M", "4M"] # frontier-backing granule
@@ -225,7 +226,9 @@ search_space:
   # Free-form escape hatch: the LLM may add env vars here, but ONLY keys
   # matching env_prefix_allowlist are exported; anything else is dropped.
   extra_env: {}
-  env_prefix_allowlist: ["I_", "ROMIO_", "FI_", "UCX_", "LUSTRE_", "PMI_", "MPIIO_"]
+  # OMPI_MCA_fcoll: force an OMPIO collective-I/O algorithm component
+  # (dynamic_gen2 | vulcan | static) -- an orthogonal, engine-native axis.
+  env_prefix_allowlist: ["I_", "ROMIO_", "FI_", "UCX_", "LUSTRE_", "PMI_", "MPIIO_", "OMPI_MCA_fcoll"]
 
 # =============================================================================
 # FITNESS SHAPING

@@ -87,6 +87,28 @@ tmux new -s evolve
 * Run inside `tmux` always: a detached ssh session otherwise kills the
   controller mid-benchmark.
 
+## 3b · Tune OMPIO directly (no evolution)
+
+Open MPI 6 removed ROMIO: OMPIO is the only MPI-IO engine there. Its Lustre
+surface is small and orthogonal — file layout × aggregation — so it is
+tuned by direct sampling, not by an LLM controller:
+
+```bash
+python3 tools/ompio_sweep.py                  # 24-point random sample + anchor
+python3 tools/ompio_sweep.py --mode grid      # full cartesian product
+python3 tools/ompio_sweep.py --summary        # re-render ranking from ledger
+```
+
+Each point runs the full lifecycle (`lfs setstripe` fresh dir → `OMPI_MCA_io
+=ompio` + `io_ompio_{num_aggregators,bytes_per_agg}` → `sbatch --wait` →
+reps → MiB/s ± SEM). Results append to `<state>/ompio_sweep/ledger.jsonl`:
+reruns skip measured points, retry failures, `Ctrl-C` summarizes what got
+measured, `winner.json`/`winner.sh` export the best config. The space lives
+in `DEFAULT_SPACE` (or `--space my.yaml`); the same knobs are guarded by
+`search_space.ompio` in `config.yaml`. Requires the plasma image built from
+the current `container/plasma_pp.def` (its `OMPI_MCA_io` pin is a
+`${VAR:-romio341}` fallback so the harness ompio override survives).
+
 ## 4 · Watch it
 
 ```bash

@@ -414,6 +414,10 @@ OMPIO_KNOWN_KEYS = {
     "num_aggregators", "jobs_per_aggregator", "io_stripe_size",
     "fb_data_size", "coll_opt", "periodic_file_sync", "fr_op",
     "accumulate_use_single_file", "verbose",
+    # Open MPI docs ("OMPIO common hints"): cb_buffer_size hint maps to the
+    # io_ompio_bytes_per_agg MCA parameter -- the per-aggregator collective
+    # buffer, THE two-phase granularity knob alongside num_aggregators.
+    "bytes_per_agg",
 }
 
 

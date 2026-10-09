@@ -30,8 +30,14 @@ From: rockylinux/rockylinux:9.7
     export PATH=/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH
 
-    # openMPI specifics
-    export OMPI_MCA_io=romio341
+    # openMPI specifics. DEFAULT engine = embedded ROMIO (production
+    # behaviour preserved), but host/harness may override: mpiio_evolve's
+    # ompio candidates export OMPI_MCA_io=ompio in the job env, and an
+    # unconditional export here would silently retarget every "ompio"
+    # measurement back to romio341. Default-expansion makes the pin a
+    # fallback instead of a cage. (OMPIO ships in this build: the
+    # configure line disables no io component.)
+    export OMPI_MCA_io="${OMPI_MCA_io:-romio341}"
 
     # epoch + openpmd-api
     export PY_API=3.12	
