@@ -531,7 +531,7 @@ yum install -y lustre-client lustre-client-devel
   # (ROMIO-info pass-through: candidate ROMIO_HINTS must not be overridden;
   # tag must exist before this build runs).
   #
-  export PIO_BENCH_VERSION=v0.2.3
+  export PIO_BENCH_VERSION=v0.2.4
   echo "Installing pio-bench version: " $PIO_BENCH_VERSION
   rm -rf /tmp/piobench
   git clone --depth 1 --branch $PIO_BENCH_VERSION https://github.com/denisbertini/pio-bench.git /tmp/piobench
