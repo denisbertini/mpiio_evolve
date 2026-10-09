@@ -333,30 +333,68 @@ def write_romio_hints(path: Path, hints: Mapping[str, str]) -> Optional[Path]:
     return path
 
 
-def romio_environment(hints_file: Optional[Path]) -> dict:
-    """Environment fragment that activates a ROMIO hint file.
+_SIZE_HINT_KEYS = {"cb_buffer_size", "ind_wr_buffer_size",
+                   "ind_rd_buffer_size", "striping_unit"}
 
-    Both names are exported, because the reader differs per MPI flavor and
-    an unread env var is harmless:
 
-      ROMIO_HINTS   -- classic ROMIO env var; THE one read by Open MPI's
-                       embedded romio341 (our plasma image: Open MPI
-                       5.0.11 static build, OMPI_MCA_io=romio341).
-                       Empirically confirmed via libmpi.so strings
-                       (ROMIO_HINTS, /etc/romio-hints, ROMIO_PRINT_HINTS
-                       present; MPIIO_HINTS absent).
-      MPIIO_HINTS   -- MPICH / Intel MPI / Cray MPICH name, kept for
-                       portability to those stacks.
+def build_mpi_info_env(hints: Mapping[str, str]) -> Optional[str]:
+    """Assemble ``MPI_Info_env``: colon-separated ``key=value`` pairs.
 
-    Debug channels (manual use): ROMIO_PRINT_HINTS=<anything> makes ROMIO
-    echo the hints it read; the site-wide file /etc/romio-hints is also
-    honored by this build. The io component stays pinned explicitly
-    (OMPI_MCA_io=romio341, as in Denis's production run_file.sh).
+    THE live hint channel for Open MPI's embedded romio341, proven on the
+    cluster 2026-10-09: ``MPI_Info_env="romio_cb_write=disable"`` blew the
+    field phase of a fixed geometry from 0.021 s to 1.409 s (x67, the
+    unmistakable un-aggregated small-write signature) -- while the classic
+    ``ROMIO_HINTS`` plaintext file (removed from ROMIO in 3.2) and
+    ``striping_factor`` (fs-autodetect no-op) did nothing at all.
+    Values must not contain ':' (all ROMIO values here don't).
+    """
+    usable = {}
+    for key, value in hints.items():
+        if key not in ROMIO_KNOWN_HINTS:
+            logger.warning("dropping unknown ROMIO hint %r", key)
+            continue
+        if ":" in str(value) or "=" in str(value):
+            logger.warning("dropping ROMIO hint %r: value unserializable "
+                           "in MPI_Info_env", key)
+            continue
+        if key in _SIZE_HINT_KEYS and isinstance(_size_key(value), int):
+            value = str(_size_key(value))   # '4M' -> '4194304': ROMIO parses
+                                            # plain bytes unconditionally
+        usable[key] = value
+    if not usable:
+        return None
+    return ":".join(f"{k}={usable[k]}" for k in sorted(usable))
+
+
+def romio_environment(hints_file: Optional[Path],
+                      hints: Optional[Mapping[str, str]] = None) -> dict:
+    """Environment fragment that activates the candidate's ROMIO hints.
+
+      MPI_Info_env  -- THE effective channel here (see build_mpi_info_env:
+                       proven x67 behavioral effect on cluster 2026-10-09;
+                       the ROMIO_HINTS file is IGNORED by romio341 -- its
+                       reader was removed in ROMIO 3.2; an earlier
+                       libmpi.so-strings check found the symbol but the
+                       live test overrules it).
+      ROMIO_HINTS   -- the hint FILE, exported for MPICH-glue stacks where
+                       the file mechanism still exists (harmless here) and
+                       as a run-record path.
+      MPIIO_HINTS   -- MPICH / Intel MPI / Cray MPICH name, portability.
+
+    Debug (manual): ROMIO_PRINT_HINTS=<anything> makes ROMIO echo the hints
+    it read. The io component stays pinned explicitly (OMPI_MCA_io=
+    romio341). NOTE: striping_* hints are no-ops on this cluster's
+    romio341 (verified via lfs getstripe) -- striping evolution goes
+    through 'lfs setstripe' controller-side, not through hints.
     """
     env = {"OMPI_MCA_io": "romio341"}
     if hints_file:
         env["ROMIO_HINTS"] = str(hints_file)
         env["MPIIO_HINTS"] = str(hints_file)
+    if hints:
+        info_env = build_mpi_info_env(hints)
+        if info_env:
+            env["MPI_Info_env"] = info_env
     return env
 
 
@@ -499,7 +537,7 @@ def build_job_environment(
     env["OMP_NUM_THREADS"] = "1"
 
     if config.engine == "romio":
-        env.update(romio_environment(hints_file))
+        env.update(romio_environment(hints_file, config.romio_hints))
     else:
         # The plasma image defaults to OMPI_MCA_io=romio341 (embedded
         # ROMIO). An explicit ompio candidate must switch the io
