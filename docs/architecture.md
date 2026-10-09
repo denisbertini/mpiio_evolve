@@ -61,9 +61,9 @@ dies.
 | | `controller.sif` (the brain) | `images/current.sif` (the simulator) |
 |---|---|---|
 | where | login node, `apptainer exec --contain` | compute nodes, inside the generated job script |
-| carries | Python 3.11, OpenEvolve, Slurm client | EPOCH, OpenMPI/ROMIO, UCX, HDF5/ADIOS2 |
+| carries | Python 3.11, OpenEvolve, Slurm client, Lustre userspace (`lfs`) | EPOCH, OpenMPI/ROMIO, UCX, HDF5/ADIOS2 |
 | builds | `apptainer build --build-arg SLURM_VERSION=…` | `./container/build_container.sh` |
-| deliberately lacks | Lustre client, nested apptainer | evolution stack, sbatch work |
+| deliberately lacks | Lustre kernel module (host-kernel service; `lfs` is only its ioctl frontend), nested apptainer | evolution stack, sbatch work |
 
 **Confinement wall** (`run_controller_sif.sh`, all proven by
 `tools/test_controller_sif.sh`): the controller sees only the Lustre state

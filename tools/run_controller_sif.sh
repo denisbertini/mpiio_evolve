@@ -4,9 +4,10 @@
 #
 # The image (container/controller.def -> images/controller.sif) carries
 # OpenEvolve (+ its full pinned dependency tree) + a version-matched Slurm
-# client.  The Lustre client is a HOST-kernel service: this script binds the
-# host 'lfs' + libs read-only when present, enabling 'lfs setstripe' inside
-# the wall (workspace.lustre_strict: true); without it, runs are hints-only.
+# client.  The Lustre client is a HOST-kernel service: the image ships the
+# userspace lfs natively (lustre-client 2.17); this script ADDITIONALLY
+# binds the host 'lfs' + libs read-only when present, shadowing the image
+# copy with the host-matched version (workspace.lustre_strict: true).
 # With --contain the
 # container sees ONLY:
 #   * ppio_tune          rw   same path  (all mutable state)
@@ -112,7 +113,9 @@ fi
 # via getstripe, lfs 2.15.8).  Striping can then be evolved from the
 # container (workspace.lustre_strict: true); every setstripe still passes
 # ensure_inside() and only ever touches freshly created files under $STATE.
-# Hosts without lfs skip this silently -> evaluator degrades to hints-only.
+# Hosts without lfs skip this silently -> the image's NATIVE lfs (installed
+# by controller.def) takes over; only if BOTH are absent does the evaluator
+# trip the strict guard.
 if [[ -x /usr/bin/lfs ]]; then
     APPTAINER_BINDPATH="$APPTAINER_BINDPATH,/usr/bin/lfs:/usr/bin/lfs:ro"
     # everything lfs links except the glibc/core set the image already has
