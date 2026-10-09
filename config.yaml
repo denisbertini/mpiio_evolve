@@ -147,12 +147,18 @@ benchmark:
       # injects the candidate as ROMIO_HINTS (env) + lfs setstripe (data
       # dir); pio-bench >= v0.2.1 passes an EMPTY MPI_Info so those hints
       # actually apply -- no per-candidate flags, no recompile, ever.
-      # Workload (fixed, instrumented): 96^3 field + 250k particles/rank,
-      # 5 checkpoints/rep -> ~0.7 GiB per checkpoint at 32 ranks.
+      # Workload (fixed, instrumented): 256^3 field + 4M particles/rank,
+      # 3 checkpoints/rep -> ~12 GiB per checkpoint at 32 ranks.
+      # SIZING RULE (Lustre): one checkpoint must exceed the client
+      # dirty-page backpressure (~19 GB on 191 GB nodes at default
+      # dirty_ratio) so sustained writes hit OST backpressure *inside*
+      # the measured window; below it, "writes" are page-cache memcpy
+      # and stripe mutations are unmeasurable. First checkpoint may
+      # still read cache-inflated -> judge candidates on the rep mean.
       # Fitness feed: pio_metrics.jsonl (bytes/seconds per checkpoint);
       # --verify stays OFF in fitness runs (verification reads would
       # pollute the measured window; smoke.sh owns correctness).
-      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} pio_bench --backend mpiio --local 96 --particles 250000 --steps 5 --interval 1"
+      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} pio_bench --backend mpiio --local 256 --particles 4000000 --steps 3 --interval 1"
       setup_script: "bash {repo}/benchmarks/generic/setup.sh {data_dir}"
       measure_script: "bash {repo}/benchmarks/generic/measure.sh --strategy jsonl {data_dir}"
 
@@ -166,7 +172,7 @@ benchmark:
       # io-only when present). Cross-check on first runs: Darshan
       # cumulative bytes ~ app bytes (layers may double-count MPI-IO vs
       # POSIX -- verify the ratio before trusting absolute v2 numbers).
-      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} -- darshan-runtime pio_bench --backend mpiio --local 96 --particles 250000 --steps 5 --interval 1"
+      command: "bash {repo}/benchmarks/generic/run.sh {data_dir} -- darshan-runtime pio_bench --backend mpiio --local 256 --particles 4000000 --steps 3 --interval 1"
       setup_script: "bash {repo}/benchmarks/generic/setup.sh {data_dir}"
       measure_script: "bash {repo}/benchmarks/generic/measure.sh --strategy darshan {data_dir}"
 
