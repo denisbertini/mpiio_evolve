@@ -395,6 +395,12 @@ def romio_environment(hints_file: Optional[Path],
         info_env = build_mpi_info_env(hints)
         if info_env:
             env["MPI_Info_env"] = info_env
+            # PRIMARY channel since 0.2.4: pio-bench injects this into the
+            # app-side MPI_Info at MPI_File_open -- portable across MPI
+            # distributions, unlike the env conventions above. Semicolon
+            # pairs; same content as MPI_Info_env (whichever ROMIO honors
+            # one, gets the identical candidate).
+            env["PIOB_ROMIO_HINTS"] = info_env.replace(":", ";")
     return env
 
 
