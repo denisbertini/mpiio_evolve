@@ -536,8 +536,11 @@ yum install -y lustre-client lustre-client-devel
   # campaign; bump deliberately, never implicitly. Requires v0.2.1+
   # (ROMIO-info pass-through: candidate ROMIO_HINTS must not be overridden;
   # tag must exist before this build runs).
+  # v0.3.0: openPMD backends (pmd_hdf5 / pmd_adios2) -- compiled in only
+  # because the openPMD 0.17.1 build block earlier in this file runs
+  # first; the backend-report gate below must show BOTH pmd engines.
   #
-  export PIO_BENCH_VERSION=v0.2.4
+  export PIO_BENCH_VERSION=v0.3.0
   echo "Installing pio-bench version: " $PIO_BENCH_VERSION
   rm -rf /tmp/piobench
   git clone --depth 1 --branch $PIO_BENCH_VERSION https://github.com/denisbertini/pio-bench.git /tmp/piobench
@@ -548,6 +551,7 @@ yum install -y lustre-client lustre-client-devel
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release | tee /tmp/piobench-configure.log
   grep -q "pio_bench: HDF5 backend ON"   /tmp/piobench-configure.log || { echo "FATAL: pio-bench built WITHOUT hdf5 backend"; exit 1; }
   grep -q "pio_bench: ADIOS2 backend ON" /tmp/piobench-configure.log || { echo "FATAL: pio-bench built WITHOUT adios2 backend (needs cxx_mpi, cf. ADIOS2_USE_MPI=ON above)"; exit 1; }
+  grep -q "pio_bench: openPMD backend ON" /tmp/piobench-configure.log || { echo "FATAL: pio-bench built WITHOUT openPMD backend (pmd_* profiles would be dead; openPMD 0.17.1 block must run first)"; exit 1; }
   cmake --build build -j$(nproc)
   cmake --install build    # -> /usr/local/bin/pio_bench
   # In-image self-test gate: every backend must actually run + verify.
